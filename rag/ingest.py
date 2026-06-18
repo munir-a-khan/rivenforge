@@ -119,6 +119,21 @@ def ingest(progress_cb=None) -> int:
     """
     import openpyxl
 
+    if not os.path.exists(XLSX_PATH):
+        if not os.path.exists(INDEX_PATH):
+            raise FileNotFoundError("good_rolls.xlsx is not available and no riven_index.json exists")
+
+        with open(INDEX_PATH, encoding="utf-8") as f:
+            existing_entries = json.load(f)
+
+        corpus = [entry.get("text_chunk", "") for entry in existing_entries]
+        save_tfidf(build_tfidf(corpus))
+        total = len(existing_entries)
+        if progress_cb:
+            progress_cb(total, total)
+        print(f"[ingest] Rebuilt TF-IDF from existing {INDEX_PATH} ({total} entries)")
+        return total
+
     wb = openpyxl.load_workbook(XLSX_PATH, data_only=True)
 
     all_entries: list[dict] = []
@@ -179,13 +194,13 @@ def _vectorize(text: str) -> list[float]:
     tokens = _tokenize(text)
     tf = Counter(tokens)
     total = max(sum(tf.values()), 1)
-    vec = [(tf[t] / total) * idf for t, idf in zip(_tfidf_vocab, _tfidf_idf)]
+    vec = [(tf[t] / total) * idf for t, idf in zip(_tfidf_vocab, _tfidf_idf, strict=True)]
     norm = math.sqrt(sum(v * v for v in vec)) or 1.0
     return [v / norm for v in vec]
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    return sum(x * y for x, y in zip(a, b))
+    return sum(x * y for x, y in zip(a, b, strict=False))
 
 
 def search(query: str, n: int = 3) -> list[WeaponEntryDict]:
@@ -207,7 +222,10 @@ def all_weapons() -> list[WeaponEntryDict]:
             return list(_index)
         except Exception:
             pass
-    # Fallback: parse xlsx directly
+    # Fallback: parse xlsx directly when the source workbook exists locally.
+    if not os.path.exists(XLSX_PATH):
+        return []
+
     import openpyxl
     wb = openpyxl.load_workbook(XLSX_PATH, data_only=True)
     out = []

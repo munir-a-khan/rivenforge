@@ -15,9 +15,10 @@ datas += collect_data_files("torch", include_py_files=False)
 
 # Bundle our own data directory
 datas += [
-    ("data/good_rolls.xlsx",       "data"),
+    ("data/riven_index.json",      "data"),
     ("data/stat_aliases.json",     "data"),
     ("data/stat_aliases_loader.py","data"),
+    ("data/tfidf_model.json",      "data"),
 ]
 
 # Bundle config skeleton (will be populated on first run)

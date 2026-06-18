@@ -8,7 +8,6 @@ from PyInstaller.utils.hooks import collect_data_files
 block_cipher = None
 
 datas = [
-    ("data/good_rolls.xlsx", "data"),
     ("data/riven_index.json", "data"),
     ("data/stat_aliases.json", "data"),
     ("data/stat_aliases_loader.py", "data"),
