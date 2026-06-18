@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local app state
+config/user_config.json
+config/user_config.json.bak.*
+logs/
+*.log
+
+# Generated OCR/debug captures and screenshots
+debug_*.png
+frontend/smoke-rivenforge.png
+
+# RAG/generated data
+data/chroma_db/
+data/good_rolls.xlsx
+
+# Build outputs
+build/
+dist/
+*.spec.log
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/src-tauri/target/
+frontend/src-tauri/binaries/*.exe
+frontend/src-tauri/gen/
+
+# Packaged binaries/installers
+*.exe
+*.msi
+*.pdb
+
+# Local tool state
+.claude/
+.env
+.env.*
+
+# Local planning scratch
+MIGRATION_PLAN.md
+MIGRATION_PHASE0_CONTRACT.md
+
+# OS/editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/

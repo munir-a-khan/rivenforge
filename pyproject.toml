@@ -1,0 +1,32 @@
+[project]
+name = "wf-rivenpicker"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"core/automation.py" = ["B905", "I001"]
+"core/capture.py" = ["I001"]
+"core/hotkey.py" = ["UP035"]
+"core/ocr.py" = ["F401"]
+"core/roll_logger.py" = ["F401", "I001"]
+"core/roller.py" = ["E701", "I001", "UP035"]
+"core/vision.py" = ["B905", "F401", "I001"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true

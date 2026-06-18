@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rivenforge",
+  "version": "0.1.5",
+  "identifier": "app.rivenforge.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "rivenforge",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 980,
+        "minHeight": 680,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": ["icons/icon.ico"],
+    "externalBin": ["binaries/rivenforge-api"],
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}
