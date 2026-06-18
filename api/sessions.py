@@ -59,6 +59,11 @@ class RollSessionManager:
         if not self._session:
             return False
         self._session.thread.stop()
+        try:
+            from core.automation import release_input_state
+            release_input_state()
+        except Exception:
+            pass
         return True
 
     def active_session_id(self) -> str | None:

@@ -19,7 +19,10 @@ import win32gui
 
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP   = 0x0004
+MOUSEEVENTF_RIGHTUP  = 0x0010
 VK_MENU              = 0x12
+VK_CONTROL           = 0x11
+VK_SHIFT             = 0x10
 KEYEVENTF_KEYUP      = 0x0002
 
 # Virtual key codes for keyboard input
@@ -118,6 +121,27 @@ def _press_key(vk: int):
 
 
 # ── Interruptible sleep ─────────────────────────────────────────────────────
+
+def release_input_state() -> None:
+    """
+    Best-effort cleanup for emergency stop and failure paths.
+
+    If automation exits while Windows or Warframe believes a modifier or mouse
+    button is still down, Alt-Tab and focus behavior can feel broken until the
+    user presses that key/button again. Releasing these inputs is harmless when
+    they are already up and gives control back faster.
+    """
+    for vk in (VK_MENU, VK_CONTROL, VK_SHIFT):
+        try:
+            _user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+        except Exception:
+            pass
+    try:
+        win32api.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        win32api.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+    except Exception:
+        pass
+
 
 def _interruptible_sleep(seconds: float, stop_flag=None) -> bool:
     """Sleep in 0.1s chunks. Returns True immediately if stop_flag is set."""

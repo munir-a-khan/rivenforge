@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::io::Write;
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -78,10 +79,24 @@ fn fixed_port_already_listening() -> bool {
     .is_ok()
 }
 
+fn post_stop_to_sidecar() -> std::io::Result<()> {
+    let mut stream = TcpStream::connect_timeout(
+        &format!("{FIXED_API_HOST}:{FIXED_API_PORT}").parse().unwrap(),
+        Duration::from_millis(350),
+    )?;
+    stream.set_write_timeout(Some(Duration::from_millis(350)))?;
+    stream.write_all(
+        b"POST /roll/stop HTTP/1.1\r\nHost: 127.0.0.1:47321\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    )?;
+    stream.flush()?;
+    Ok(())
+}
+
 fn main() {
     let sidecar_state = Arc::new(SidecarState::default());
     let managed_state = Arc::clone(&sidecar_state);
     let shutdown_state = Arc::clone(&sidecar_state);
+    let hotkey_state = Arc::clone(&sidecar_state);
 
     // Ctrl+Shift+Q — the emergency stop hotkey. Registered globally so it
     // fires while Warframe (or anything else) has keyboard focus. The
@@ -100,6 +115,11 @@ fn main() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed && *shortcut == stop_shortcut {
+                        let state = Arc::clone(&hotkey_state);
+                        std::thread::spawn(move || match post_stop_to_sidecar() {
+                            Ok(()) => state.push_log("tauri: hotkey posted /roll/stop".to_string()),
+                            Err(error) => state.push_log(format!("tauri: hotkey stop failed: {error}")),
+                        });
                         let _ = app.emit("rivenforge-hotkey-stop", HOTKEY_LABEL);
                     }
                 })

@@ -262,6 +262,11 @@ class RollerThread(threading.Thread):
 
         except Exception as e:
             import traceback
+            try:
+                from core.automation import release_input_state
+                release_input_state()
+            except Exception:
+                pass
             if self.on_error:
                 self.on_error(f"{e}\n{traceback.format_exc()}")
 
@@ -269,6 +274,11 @@ class RollerThread(threading.Thread):
         try:
             from core import roll_logger as rlog
             rlog.log_session_end(reason)
+        except Exception:
+            pass
+        try:
+            from core.automation import release_input_state
+            release_input_state()
         except Exception:
             pass
         if self.on_done:
