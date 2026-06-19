@@ -59,6 +59,65 @@ def test_analyze_endpoint_with_manual_ocr_returns_structured_decision():
     assert payload["confidence"] == 1.0
 
 
+def test_capture_status_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        "api.app.warframe_window_status",
+        lambda: {
+            "available": True,
+            "found": True,
+            "visible": True,
+            "minimized": False,
+            "foreground": False,
+            "rect": (10, 20, 810, 620),
+            "capture_backends": {"mss": True, "dxcam": True, "windows_graphics_capture": False},
+            "notes": ["Warframe is not focused; OCR can still work if the window remains visible."],
+        },
+    )
+    client = TestClient(app)
+
+    response = client.get("/capture/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["found"] is True
+    assert payload["foreground"] is False
+    assert payload["rect"] == [10, 20, 810, 620]
+
+
+def test_capture_analyze_endpoint_uses_live_screen_source(monkeypatch):
+    from core.ocr_pipeline import StaticTextOcrEngine, run_ocr_pipeline
+
+    class FakeSource:
+        def capture(self):
+            img = Image.new("RGB", (640, 480), color=(0, 0, 0))
+            img.info["capture_path"] = "dxgi"
+            img.info["brightness"] = 42
+            return img
+
+    def fake_run_ocr_pipeline(*_args, **_kwargs):
+        return run_ocr_pipeline(
+            FakeSource(),
+            crop_mode="full",
+            ocr_engine=StaticTextOcrEngine((
+                "+100% Critical Chance",
+                "+80% Critical Damage",
+                "-30% Impact",
+            )),
+            preprocess=False,
+        )
+
+    monkeypatch.setattr("api.app.run_ocr_pipeline", fake_run_ocr_pipeline)
+    client = TestClient(app)
+
+    response = client.post("/capture/analyze", data={"crop_mode": "full", "monitor_index": "0"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["capture_path"] == "dxgi"
+    assert payload["brightness"] == 42
+    assert payload["parse"]["status"] == "ok"
+
+
 def test_analyze_endpoint_runs_pipeline_off_event_loop_thread(monkeypatch):
     client = TestClient(app)
     caller_thread = threading.get_ident()

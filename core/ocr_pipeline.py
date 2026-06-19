@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from PIL import Image
 
@@ -64,6 +64,7 @@ class OcrPipelineResult:
     average_confidence: float
     parse: ParseResult
     review_reasons: tuple[str, ...]
+    capture_info: dict[str, Any]
     debug_dir: str | None = None
 
     @property
@@ -166,6 +167,7 @@ def run_ocr_pipeline(
         average_confidence=average_confidence,
         parse=parsed,
         review_reasons=tuple(review_reasons),
+        capture_info=dict(raw.info or {}),
         debug_dir=saved_debug_dir,
     )
 

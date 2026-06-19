@@ -51,3 +51,14 @@ class AnalyzeResponse(BaseModel):
     capture_path: CapturePathStr = "mss"
     brightness: int = 0
     review_reasons: list[str] = Field(default_factory=list)
+
+
+class CaptureStatusResponse(BaseModel):
+    available: bool
+    found: bool
+    visible: bool
+    minimized: bool
+    foreground: bool
+    rect: tuple[int, int, int, int] | None = None
+    capture_backends: dict[str, bool] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)

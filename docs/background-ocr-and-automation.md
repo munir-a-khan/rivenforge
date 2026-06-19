@@ -15,6 +15,15 @@ visible on the desktop. Examples:
 In these cases, normal desktop capture (`mss`) or DXGI capture (`dxcam`) can
 still see the pixels that OCR needs.
 
+The first implementation exposes this as a non-invasive live capture flow:
+
+- `GET /capture/status` reports whether the Warframe window is found, visible,
+  minimized, and currently focused.
+- `POST /capture/analyze` captures the visible Warframe frame and sends it
+  through the same OCR/parser/rule pipeline as saved screenshots.
+- The React Manual Analyze screen has a `Capture Warframe` button for testing
+  this without clicking in-game or spending kuva.
+
 ## What Is Not Supported
 
 True hidden-window rolling is not supported:

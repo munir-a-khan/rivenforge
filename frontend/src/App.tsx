@@ -631,6 +631,8 @@ function ManualAnalyze() {
   const [cropMode, setCropMode] = useState<CropMode>("new_card");
   const [manualOcr, setManualOcr] = useState("");
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
+  const [captureStatus, setCaptureStatus] = useState<string>("");
+  const [liveCaptureBusy, setLiveCaptureBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function acceptFile(next: File) {
@@ -647,6 +649,25 @@ function ManualAnalyze() {
   async function analyze() {
     if (!file) return;
     setResult(await api.analyze(file, cropMode, manualOcr));
+  }
+
+  async function analyzeLiveCapture() {
+    setLiveCaptureBusy(true);
+    setCaptureStatus("Capturing visible Warframe frame...");
+    try {
+      const status = await api.captureStatus();
+      const notes = status.notes.length ? ` ${status.notes.join(" ")}` : "";
+      setCaptureStatus(
+        status.found
+          ? `Warframe found. Visible: ${status.visible ? "yes" : "no"}. Focused: ${status.foreground ? "yes" : "no"}.${notes}`
+          : `Warframe not found.${notes}`,
+      );
+      setResult(await api.analyzeLiveCapture(cropMode));
+    } catch (error) {
+      setCaptureStatus(error instanceof Error ? error.message : "Live capture failed.");
+    } finally {
+      setLiveCaptureBusy(false);
+    }
   }
 
   async function pasteImage() {
@@ -672,6 +693,9 @@ function ManualAnalyze() {
         <div className="row">
           <button className="secondary" onClick={() => inputRef.current?.click()}>Choose File</button>
           <button className="secondary" onClick={pasteImage}>Paste Image</button>
+          <button className="secondary" disabled={liveCaptureBusy} onClick={analyzeLiveCapture}>
+            {liveCaptureBusy ? "Capturing..." : "Capture Warframe"}
+          </button>
         </div>
         <label>Crop mode</label>
         <select value={cropMode} onChange={(e) => setCropMode(e.target.value as CropMode)}>
@@ -680,6 +704,7 @@ function ManualAnalyze() {
           <option value="full">Full screen</option>
         </select>
         <p className="hint">New card targets the right-side comparison roll. Single card targets the centered card. Full screen skips cropping for debugging.</p>
+        {captureStatus && <p className="hint">{captureStatus}</p>}
         <label>Manual OCR lines</label>
         <textarea value={manualOcr} onChange={(e) => setManualOcr(e.target.value)} placeholder="+120% Critical Damage&#10;+80% Range&#10;-30% Impact" />
         <button className="primary-action compact" disabled={!file} onClick={analyze}>Analyze</button>

@@ -17,6 +17,7 @@ from api.diagnostics import build_diagnostic_bundle
 from api.events import event_bus
 from api.schemas import (
     AnalyzeResponse,
+    CaptureStatusResponse,
     CropModeStr,
     HealthResponse,
     RagRebuildResponse,
@@ -29,7 +30,14 @@ from api.schemas import (
 )
 from api.sessions import session_manager
 from core.analysis import analyze_pipeline_result
-from core.ocr_pipeline import StaticTextOcrEngine, analyze_screenshot
+from core.capture import warframe_window_status
+from core.ocr_pipeline import (
+    OcrPipelineResult,
+    ScreenCaptureSource,
+    StaticTextOcrEngine,
+    analyze_screenshot,
+    run_ocr_pipeline,
+)
 from core.profile_schema import load_profile
 from core.rules import default_profiles_from_weapon_data
 from data_util import load_config, save_config
@@ -43,6 +51,30 @@ def _exit_process_later(delay_seconds: float = 0.2) -> None:
         os._exit(0)
 
     threading.Thread(target=run, name="rivenforge-api-shutdown", daemon=True).start()
+
+
+def _configured_profiles() -> list[Any]:
+    profiles = []
+    for raw in load_config().get("profiles", []):
+        try:
+            profiles.append(load_profile(raw))
+        except Exception:
+            continue
+    return profiles
+
+
+def _analyze_response_from_pipeline(pipeline: OcrPipelineResult, analysis: Any) -> AnalyzeResponse:
+    capture_path = pipeline.capture_info.get("capture_path", "mss")
+    if capture_path not in {"mss", "dxgi", "mss(dark)"}:
+        capture_path = "mss"
+    return AnalyzeResponse(
+        parse=pipeline.parse.to_legacy(),
+        decision=analysis.decision.to_legacy(),
+        confidence=pipeline.average_confidence,
+        capture_path=capture_path,
+        brightness=int(pipeline.capture_info.get("brightness", 0)),
+        review_reasons=list(pipeline.review_reasons),
+    )
 
 
 def create_app() -> FastAPI:
@@ -73,6 +105,10 @@ def create_app() -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(ready=True, capture_path="mss")
+
+    @app.get("/capture/status", response_model=CaptureStatusResponse)
+    def capture_status() -> CaptureStatusResponse:
+        return CaptureStatusResponse(**warframe_window_status())
 
     @app.get("/stats")
     def get_stats() -> list[str]:
@@ -138,12 +174,7 @@ def create_app() -> FastAPI:
                 crop_mode=crop_mode,
                 ocr_engine=ocr_engine,
             )
-            profiles = []
-            for raw in load_config().get("profiles", []):
-                try:
-                    profiles.append(load_profile(raw))
-                except Exception:
-                    continue
+            profiles = _configured_profiles()
             analysis = await run_in_threadpool(analyze_pipeline_result, pipeline, profiles)
         finally:
             try:
@@ -151,14 +182,24 @@ def create_app() -> FastAPI:
             except OSError:
                 pass
 
-        return AnalyzeResponse(
-            parse=pipeline.parse.to_legacy(),
-            decision=analysis.decision.to_legacy(),
-            confidence=pipeline.average_confidence,
-            capture_path="mss",
-            brightness=0,
-            review_reasons=list(pipeline.review_reasons),
+        return _analyze_response_from_pipeline(pipeline, analysis)
+
+    @app.post("/capture/analyze", response_model=AnalyzeResponse)
+    async def capture_analyze(
+        crop_mode: Annotated[CropModeStr, Form()] = "new_card",
+        monitor_index: Annotated[int, Form()] = 0,
+    ) -> AnalyzeResponse:
+        pipeline = await run_in_threadpool(
+            run_ocr_pipeline,
+            ScreenCaptureSource(monitor_index=monitor_index),
+            crop_mode=crop_mode,
         )
+        analysis = await run_in_threadpool(
+            analyze_pipeline_result,
+            pipeline,
+            _configured_profiles(),
+        )
+        return _analyze_response_from_pipeline(pipeline, analysis)
 
     @app.post("/roll/start", response_model=RollStartResponse)
     def roll_start(payload: RollStartRequest) -> RollStartResponse:

@@ -67,6 +67,17 @@ export interface AnalyzeResponse {
   review_reasons: string[];
 }
 
+export interface CaptureStatus {
+  available: boolean;
+  found: boolean;
+  visible: boolean;
+  minimized: boolean;
+  foreground: boolean;
+  rect: [number, number, number, number] | null;
+  capture_backends: Record<string, boolean>;
+  notes: string[];
+}
+
 export interface RagStatus {
   ready: boolean;
   entries: number;
@@ -209,6 +220,13 @@ export const api = {
     body.append("crop_mode", cropMode);
     body.append("manual_ocr_text", manualOcrText);
     return request<AnalyzeResponse>("/analyze", { method: "POST", body });
+  },
+  captureStatus: () => request<CaptureStatus>("/capture/status"),
+  analyzeLiveCapture: (cropMode: CropMode) => {
+    const body = new FormData();
+    body.append("crop_mode", cropMode);
+    body.append("monitor_index", "0");
+    return request<AnalyzeResponse>("/capture/analyze", { method: "POST", body });
   },
   startRoll: (cfg: UserConfig) =>
     request<{ session_id: string }>("/roll/start", {

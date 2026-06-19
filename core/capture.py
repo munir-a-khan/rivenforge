@@ -19,6 +19,7 @@ display capture the right output.
 
 import threading
 import time
+from typing import Any
 
 import numpy as np
 from PIL import Image
@@ -49,6 +50,49 @@ def _warframe_window_rect():
         return None
     rect = win32gui.GetWindowRect(hwnd)
     return rect  # (left, top, right, bottom)
+
+
+def warframe_window_status() -> dict[str, Any]:
+    """Return non-invasive Warframe window/capture status for diagnostics."""
+    status: dict[str, Any] = {
+        "available": HAS_WIN32,
+        "found": False,
+        "visible": False,
+        "minimized": False,
+        "foreground": False,
+        "rect": None,
+        "capture_backends": {
+            "mss": True,
+            "dxcam": HAS_DXCAM,
+            "windows_graphics_capture": False,
+        },
+        "notes": [],
+    }
+    if not HAS_WIN32:
+        status["notes"].append("pywin32 is not available on this platform.")
+        return status
+
+    hwnd = win32gui.FindWindow(None, "Warframe")
+    if not hwnd:
+        status["notes"].append("Warframe window was not found.")
+        return status
+
+    rect = tuple(int(value) for value in win32gui.GetWindowRect(hwnd))
+    status.update({
+        "found": True,
+        "visible": bool(win32gui.IsWindowVisible(hwnd)),
+        "minimized": bool(win32gui.IsIconic(hwnd)),
+        "foreground": win32gui.GetForegroundWindow() == hwnd,
+        "rect": rect,
+    })
+
+    if status["minimized"]:
+        status["notes"].append("Warframe is minimized; desktop capture cannot see minimized frames.")
+    elif not status["foreground"]:
+        status["notes"].append("Warframe is not focused; OCR can still work if the window remains visible.")
+    if not HAS_DXCAM:
+        status["notes"].append("dxcam is not installed; fullscreen/DXGI fallback is unavailable.")
+    return status
 
 
 _BLACK_FRAME_BRIGHTNESS = 20  # average luminance below this = black frame
