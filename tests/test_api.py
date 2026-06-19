@@ -148,3 +148,24 @@ def test_roll_start_and_stop_are_wrapped(monkeypatch):
     assert start.json() == {"session_id": "session-1"}
     assert stop.status_code == 200
     assert stop.json() == {"stopped": True}
+
+
+def test_shutdown_stops_session_and_schedules_exit(monkeypatch):
+    called = {"stop": False, "exit": False}
+
+    def fake_stop():
+        called["stop"] = True
+        return True
+
+    def fake_exit_later():
+        called["exit"] = True
+
+    monkeypatch.setattr("api.app.session_manager.stop", fake_stop)
+    monkeypatch.setattr("api.app._exit_process_later", fake_exit_later)
+    client = TestClient(app)
+
+    response = client.post("/shutdown")
+
+    assert response.status_code == 200
+    assert response.json() == {"shutting_down": True}
+    assert called == {"stop": True, "exit": True}

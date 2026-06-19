@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import tempfile
+import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Annotated, Any
@@ -32,6 +35,14 @@ from core.rules import default_profiles_from_weapon_data
 from data_util import load_config, save_config
 from rag import rag as rag_mod
 from rag.ingest import all_weapons, ingest, weapon_lookup
+
+
+def _exit_process_later(delay_seconds: float = 0.2) -> None:
+    def run() -> None:
+        time.sleep(delay_seconds)
+        os._exit(0)
+
+    threading.Thread(target=run, name="rivenforge-api-shutdown", daemon=True).start()
 
 
 def create_app() -> FastAPI:
@@ -160,6 +171,17 @@ def create_app() -> FastAPI:
     @app.post("/roll/stop", response_model=RollStopResponse)
     def roll_stop() -> RollStopResponse:
         return RollStopResponse(stopped=session_manager.stop())
+
+    @app.post("/shutdown")
+    def shutdown() -> dict[str, bool]:
+        session_manager.stop()
+        try:
+            from core.automation import release_input_state
+            release_input_state()
+        except Exception:
+            pass
+        _exit_process_later()
+        return {"shutting_down": True}
 
     @app.get("/rag/status", response_model=RagStatusResponse)
     def rag_status() -> RagStatusResponse:

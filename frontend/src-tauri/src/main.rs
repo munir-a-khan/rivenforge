@@ -80,14 +80,23 @@ fn fixed_port_already_listening() -> bool {
 }
 
 fn post_stop_to_sidecar() -> std::io::Result<()> {
+    post_empty_request_to_sidecar("/roll/stop")
+}
+
+fn post_shutdown_to_sidecar() -> std::io::Result<()> {
+    post_empty_request_to_sidecar("/shutdown")
+}
+
+fn post_empty_request_to_sidecar(path: &str) -> std::io::Result<()> {
     let mut stream = TcpStream::connect_timeout(
         &format!("{FIXED_API_HOST}:{FIXED_API_PORT}").parse().unwrap(),
         Duration::from_millis(350),
     )?;
     stream.set_write_timeout(Some(Duration::from_millis(350)))?;
-    stream.write_all(
-        b"POST /roll/stop HTTP/1.1\r\nHost: 127.0.0.1:47321\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-    )?;
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {FIXED_API_HOST}:{FIXED_API_PORT}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes())?;
     stream.flush()?;
     Ok(())
 }
@@ -230,6 +239,8 @@ fn main() {
         })
         .on_window_event(move |_window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                let _ = post_stop_to_sidecar();
+                let _ = post_shutdown_to_sidecar();
                 if let Ok(mut child_slot) = shutdown_state.child.lock() {
                     if let Some(child) = child_slot.take() {
                         let _ = child.kill();
