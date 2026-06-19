@@ -50,6 +50,9 @@ class AnalyzeResponse(BaseModel):
     confidence: float
     capture_path: CapturePathStr = "mss"
     brightness: int = 0
+    brightness_p95: int = 0
+    raw_image_size: tuple[int, int] | None = None
+    crop_image_size: tuple[int, int] | None = None
     review_reasons: list[str] = Field(default_factory=list)
 
 

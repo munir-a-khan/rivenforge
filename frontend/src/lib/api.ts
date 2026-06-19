@@ -64,6 +64,9 @@ export interface AnalyzeResponse {
   confidence: number;
   capture_path: "mss" | "dxgi" | "mss(dark)";
   brightness: number;
+  brightness_p95: number;
+  raw_image_size: [number, number] | null;
+  crop_image_size: [number, number] | null;
   review_reasons: string[];
 }
 

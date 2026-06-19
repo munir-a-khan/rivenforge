@@ -744,6 +744,11 @@ function DebugText({ result }: { result: AnalyzeResponse }) {
     <pre className="debug-text">
 {JSON.stringify({
   confidence: result.confidence,
+  capture_path: result.capture_path,
+  brightness: result.brightness,
+  brightness_p95: result.brightness_p95,
+  raw_image_size: result.raw_image_size,
+  crop_image_size: result.crop_image_size,
   status: result.parse.status,
   review_reasons: result.review_reasons,
   traces: result.decision.traces

@@ -95,7 +95,8 @@ def warframe_window_status() -> dict[str, Any]:
     return status
 
 
-_BLACK_FRAME_BRIGHTNESS = 20  # average luminance below this = black frame
+_BLACK_FRAME_BRIGHTNESS = 12  # average luminance below this may be black
+_BLACK_FRAME_P95 = 28         # bright-pixel percentile below this confirms black
 
 
 def _avg_brightness(img: Image.Image) -> int:
@@ -106,6 +107,24 @@ def _avg_brightness(img: Image.Image) -> int:
     """
     small = img.convert("L").resize((64, 64), Image.NEAREST)
     return int(np.array(small, dtype=np.uint16).mean())
+
+
+def _brightness_stats(img: Image.Image) -> tuple[int, int]:
+    """
+    Return (average, p95) luminance over a downsampled image.
+
+    Warframe's riven screen can have a low average brightness while still
+    containing bright readable UI. A true black capture has both low average
+    and low high-percentile brightness.
+    """
+    small = img.convert("L").resize((96, 54), Image.NEAREST)
+    arr = np.array(small, dtype=np.uint16)
+    return int(arr.mean()), int(np.percentile(arr, 95))
+
+
+def _is_black_frame(img: Image.Image) -> bool:
+    avg, p95 = _brightness_stats(img)
+    return avg < _BLACK_FRAME_BRIGHTNESS and p95 < _BLACK_FRAME_P95
 
 
 # ── DXGI fallback (Fullscreen Exclusive) ────────────────────────────────────
@@ -242,22 +261,24 @@ def grab_frame(monitor_index: int = 0) -> Image.Image:
         shot = sct.grab(region)
         img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
 
-    brightness   = _avg_brightness(img)
+    brightness, p95 = _brightness_stats(img)
     capture_path = "mss"
 
-    if brightness < _BLACK_FRAME_BRIGHTNESS:
+    if _is_black_frame(img):
         dxgi_img = _capture_via_dxgi(rect)
         if dxgi_img is not None:
-            dxgi_brightness = _avg_brightness(dxgi_img)
+            dxgi_brightness, dxgi_p95 = _brightness_stats(dxgi_img)
             if dxgi_brightness > brightness:
                 img          = dxgi_img
                 brightness   = dxgi_brightness
+                p95          = dxgi_p95
                 capture_path = "dxgi"
-        if capture_path == "mss" and brightness < _BLACK_FRAME_BRIGHTNESS:
+        if capture_path == "mss" and _is_black_frame(img):
             capture_path = "mss(dark)"
 
     img.info["brightness"]   = brightness
-    img.info["black_frame"]  = brightness < _BLACK_FRAME_BRIGHTNESS
+    img.info["brightness_p95"] = p95
+    img.info["black_frame"]  = _is_black_frame(img)
     img.info["capture_path"] = capture_path
     return img
 
@@ -319,8 +340,8 @@ def crop_new_card_region(img: Image.Image) -> Image.Image:
       Scaled to 1920: x=960–1440 → 50–75%
     """
     w, h = img.size
-    left   = int(w * 0.50)
-    right  = int(w * 0.78)
-    top    = int(h * 0.25)
-    bottom = int(h * 0.80)
+    left   = int(w * 0.42)
+    right  = int(w * 0.59)
+    top    = int(h * 0.42)
+    bottom = int(h * 0.76)
     return img.crop((left, top, right, bottom))

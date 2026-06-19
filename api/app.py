@@ -73,6 +73,9 @@ def _analyze_response_from_pipeline(pipeline: OcrPipelineResult, analysis: Any) 
         confidence=pipeline.average_confidence,
         capture_path=capture_path,
         brightness=int(pipeline.capture_info.get("brightness", 0)),
+        brightness_p95=int(pipeline.capture_info.get("brightness_p95", 0)),
+        raw_image_size=pipeline.raw_image_size,
+        crop_image_size=pipeline.crop_image_size,
         review_reasons=list(pipeline.review_reasons),
     )
 
