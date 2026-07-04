@@ -17,9 +17,11 @@ from api.diagnostics import build_diagnostic_bundle
 from api.events import event_bus
 from api.schemas import (
     AnalyzeResponse,
+    CaptureBackendStr,
     CaptureStatusResponse,
     CropModeStr,
     HealthResponse,
+    InputProbeResponse,
     RagRebuildResponse,
     RagStatusResponse,
     RollStartRequest,
@@ -63,9 +65,78 @@ def _configured_profiles() -> list[Any]:
     return profiles
 
 
+def _run_input_probe() -> InputProbeResponse:
+    """
+    Post a non-destructive hover to a Warframe UI button and report it.
+
+    Uses WGC to read the (possibly covered) window, the existing vision
+    button-finder to locate a target, and bg_input to post a MOUSEMOVE only.
+    Never clicks — so it can't roll a riven or spend kuva. This is how the
+    user gets an empirical yes/no on whether background input registers.
+    """
+    from core import bg_input, capture_wgc, vision
+    from core.capture import warframe_window_status
+
+    status = warframe_window_status()
+    notes: list[str] = []
+    hwnd = status.get("hwnd")
+
+    if not bg_input.is_available():
+        return InputProbeResponse(available=False, notes=["pywin32 unavailable; cannot post input."])
+    if not hwnd:
+        return InputProbeResponse(available=True, notes=["Warframe window not found; is the game running?"])
+    if status.get("minimized"):
+        return InputProbeResponse(
+            available=True, hwnd=hwnd,
+            notes=["Warframe is minimized — restore it (it can stay unfocused) and retry."],
+        )
+
+    frame = capture_wgc.capture_window(int(hwnd)) if capture_wgc.is_available() else None
+    backend_used = "wgc" if frame is not None else None
+    if frame is None:
+        # Fall back to the auto ladder just to locate a button coordinate.
+        from core.capture import grab_frame
+        frame = grab_frame(backend="auto")
+        backend_used = frame.info.get("capture_path", "auto")
+        notes.append("WGC frame unavailable; used desktop capture to locate a button.")
+
+    buttons = vision.find_all_buttons(frame)
+    target = None
+    target_label = None
+    for label in ("cycle_button", "confirm_button", "cycle_yes", "keep_yes"):
+        pos = buttons.get(label)
+        if pos:
+            target, target_label = pos, label
+            break
+
+    if target is None:
+        notes.append(
+            "No riven-UI button found on screen. Open the riven cycling screen "
+            "in Warframe and retry so the probe has a target to hover."
+        )
+        return InputProbeResponse(
+            available=True, hwnd=hwnd, capture_backend_used=backend_used, notes=notes,
+        )
+
+    # Button coords are in captured-frame space, which for a WGC window
+    # capture is client space. Post a hover there — no click.
+    cx, cy = int(target[0]), int(target[1])
+    probe = bg_input.probe_target(int(hwnd), cx, cy)
+    notes.extend(probe.get("notes", []))
+    return InputProbeResponse(
+        available=True,
+        hwnd=hwnd,
+        posted_move=bool(probe.get("posted_move")),
+        client_coords=[cx, cy],
+        target_label=target_label,
+        capture_backend_used=backend_used,
+        notes=notes,
+    )
+
+
 def _analyze_response_from_pipeline(pipeline: OcrPipelineResult, analysis: Any) -> AnalyzeResponse:
     capture_path = pipeline.capture_info.get("capture_path", "mss")
-    if capture_path not in {"mss", "dxgi", "mss(dark)"}:
+    if capture_path not in {"mss", "dxgi", "mss(dark)", "wgc"}:
         capture_path = "mss"
     return AnalyzeResponse(
         parse=pipeline.parse.to_legacy(),
@@ -191,10 +262,14 @@ def create_app() -> FastAPI:
     async def capture_analyze(
         crop_mode: Annotated[CropModeStr, Form()] = "new_card",
         monitor_index: Annotated[int, Form()] = 0,
+        backend: Annotated[CaptureBackendStr, Form()] = "auto",
     ) -> AnalyzeResponse:
+        # backend="wgc" captures the Warframe window directly (works even
+        # when it's covered / unfocused / on a second monitor); "auto" uses
+        # the fast mss -> DXGI ladder for the foreground/visible case.
         pipeline = await run_in_threadpool(
             run_ocr_pipeline,
-            ScreenCaptureSource(monitor_index=monitor_index),
+            ScreenCaptureSource(monitor_index=monitor_index, backend=backend),
             crop_mode=crop_mode,
         )
         analysis = await run_in_threadpool(
@@ -203,6 +278,17 @@ def create_app() -> FastAPI:
             _configured_profiles(),
         )
         return _analyze_response_from_pipeline(pipeline, analysis)
+
+    @app.post("/capture/input-probe", response_model=InputProbeResponse)
+    async def capture_input_probe() -> InputProbeResponse:
+        """
+        Non-destructive test of whether Warframe honors background
+        (PostMessage) input. Captures the window via WGC, finds a UI button,
+        posts a HOVER to it (never a click, so no riven is rolled), and
+        reports what happened. The user compares the before/after window
+        visually to decide whether background rolling is viable.
+        """
+        return await run_in_threadpool(_run_input_probe)
 
     @app.post("/roll/start", response_model=RollStartResponse)
     def roll_start(payload: RollStartRequest) -> RollStartResponse:

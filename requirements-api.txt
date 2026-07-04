@@ -1,0 +1,27 @@
+# Headless API dependencies (Linux container).
+#
+# This is the CROSS-PLATFORM subset of requirements.txt. It runs the FastAPI
+# sidecar for the parts that don't need Windows: the rules engine, RAG scoring
+# (prebuilt TF-IDF index in data/), config, weapon lookup, and manual-OCR
+# analysis (paste stat lines, no image).
+#
+# Deliberately EXCLUDED here (Windows-only or desktop-only):
+#   PyQt5, pyinstaller          - legacy desktop GUI / packaging
+#   pywin32, dxcam,             - screen/window capture (need Windows + a display)
+#   windows-capture, winocr
+#   pyautogui                   - foreground input automation
+#   easyocr, chromadb,          - not used by the current runtime path
+#   sentence-transformers         (OCR is winocr; RAG is TF-IDF JSON)
+#
+# What that means in a container: /health, /config, /weapons, /stats, /rag/*,
+# and /analyze with manual_ocr_text all work. /capture/* and image-OCR /analyze
+# require a Windows host (see PACKAGING.md).
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+numpy>=1.26
+Pillow>=10.0
+rapidfuzz>=3.0
+openpyxl>=3.1
+mss>=9.0

@@ -1,0 +1,38 @@
+# Keep the image small and the build fast — only api/core/rag/data/config
+# plus a couple of root .py files are COPYed in the Dockerfile, but this
+# guards against accidental context bloat and secrets.
+
+# Frontend / Tauri shell (not part of the headless API)
+frontend/
+gui/
+
+# Build + packaging artifacts
+build/
+dist/
+*.spec
+**/__pycache__/
+*.pyc
+
+# Node / Rust / bundler caches (in case context widens)
+**/node_modules/
+**/target/
+
+# Local dev noise
+logs/
+*.log
+debug_*.png
+.venv/
+venv/
+.git/
+.github/
+
+# Docs and planning (not needed at runtime)
+docs/
+*.md
+
+# Windows-only deps list (container uses requirements-api.txt)
+requirements.txt
+requirements-dev.txt
+
+# Launchers
+*.bat

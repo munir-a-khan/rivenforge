@@ -3,7 +3,7 @@
 
 import os
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 block_cipher = None
 
@@ -19,6 +19,12 @@ datas += collect_data_files("fastapi")
 datas += collect_data_files("starlette")
 datas += collect_data_files("uvicorn")
 
+# windows-capture (WGC backend) is a compiled Rust extension (.pyd) — collect_all
+# grabs its binary + data so the frozen sidecar can import it. It's optional at
+# runtime (guarded), but bundling it is what enables background window capture.
+_wc_datas, _wc_binaries, _wc_hidden = collect_all("windows_capture")
+datas += _wc_datas
+
 hiddenimports = [
     "api.app",
     "api.events",
@@ -26,7 +32,9 @@ hiddenimports = [
     "api.sessions",
     "core.analysis",
     "core.automation",
+    "core.bg_input",
     "core.capture",
+    "core.capture_wgc",
     "core.contracts",
     "core.hotkey",
     "core.models",
@@ -68,12 +76,14 @@ hiddenimports = [
     "cv2",
     "numpy",
     "PIL",
+    "windows_capture",
 ]
+hiddenimports += _wc_hidden
 
 a = Analysis(
     ["api_sidecar.py"],
     pathex=[os.path.abspath(".")],
-    binaries=[],
+    binaries=list(_wc_binaries),
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

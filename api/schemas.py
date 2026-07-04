@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field
 
 WeaponTypeStr = Literal["primary", "secondary", "melee", "archgun", "robotic", "stat sticks"]
 CropModeStr = Literal["new_card", "single_card", "full"]
-CapturePathStr = Literal["mss", "dxgi", "mss(dark)"]
+CapturePathStr = Literal["mss", "dxgi", "mss(dark)", "wgc"]
+CaptureBackendStr = Literal["auto", "wgc"]
 
 
 class HealthResponse(BaseModel):
@@ -63,5 +64,21 @@ class CaptureStatusResponse(BaseModel):
     minimized: bool
     foreground: bool
     rect: tuple[int, int, int, int] | None = None
+    hwnd: int | None = None
     capture_backends: dict[str, bool] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+class InputProbeResponse(BaseModel):
+    """
+    Result of a non-destructive background-input probe: whether we posted a
+    hover to the Warframe window, and enough context for the user to judge
+    whether the UI reacted. No click is sent, so no riven is rolled.
+    """
+    available: bool
+    hwnd: int | None = None
+    posted_move: bool = False
+    client_coords: list[int] = Field(default_factory=list)
+    target_label: str | None = None
+    capture_backend_used: str | None = None
     notes: list[str] = Field(default_factory=list)

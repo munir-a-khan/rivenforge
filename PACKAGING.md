@@ -132,3 +132,51 @@ pyinstaller build.spec
 
 The PyQt target remains available until the Tauri shell has completed an
 end-to-end rolling session.
+
+## Launchers (Windows)
+
+Two `.bat` files at the repo root:
+
+- **`run-rivenforge.bat`** — double-click to launch the installed desktop app
+  (`%LOCALAPPDATA%\rivenforge\rivenforge.exe`). The app spawns its own bundled
+  sidecar, or reuses one already listening on port 47321.
+- **`run-rivenforge-dev.bat`** — runs the API sidecar from **source** on the
+  fixed port, then launches the installed app against it. Because the Tauri
+  shell reuses an already-listening sidecar, this lets you test the latest
+  `core/` and `api/` Python changes in the real app **without a rebuild**.
+  Pass `--api-only` to start just the sidecar (for curl / endpoint tests).
+
+## Headless API container (Linux)
+
+`Dockerfile` + `docker-compose.yml` build a Linux image that serves the
+**cross-platform** half of rivenforge. It uses `requirements-api.txt` (not the
+full `requirements.txt`).
+
+```bash
+docker compose up --build
+curl http://localhost:47321/health
+```
+
+**Works in the container:** `/health`, `/config`, `/weapons`, `/stats`,
+`/rag/*`, and `/analyze` with `manual_ocr_text` (paste stat lines — you still
+upload any small placeholder image, the text overrides OCR).
+
+**Windows-only (NOT in the container):** `/capture/*` and image OCR via
+`/analyze`. These need `winocr`, `dxcam`, and `Windows.Graphics.Capture`, which
+exist only on a Windows host with a display. The capture endpoints degrade
+gracefully — `/capture/status` reports `available: false` rather than crashing.
+
+Verified: with every Windows-only module blocked (simulating the container),
+the app imports and the full headless path — including rules evaluation on
+manual-OCR input — returns correct results.
+
+### Capture backends (Windows host only)
+
+| Backend | Module | Reaches |
+|---|---|---|
+| `mss` | mss (GDI/BitBlt) | foreground / visible, uncovered |
+| `dxgi` | dxcam (Desktop Duplication) | Fullscreen Exclusive; falls back on black frame |
+| `wgc` | windows-capture (Windows.Graphics.Capture) | the Warframe **window** even when covered / unfocused / on a 2nd monitor |
+
+`grab_frame(backend="wgc")` / `POST /capture/analyze` with `backend=wgc` selects
+the window-targeted path. No process injection is involved in any backend.

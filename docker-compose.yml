@@ -1,0 +1,22 @@
+# rivenforge headless API.
+#
+#   docker compose up --build
+#   curl http://localhost:47321/health
+#
+# Serves rules / RAG / config / weapons / stats / manual-OCR analysis.
+# Live capture + image OCR are Windows-only and not available here.
+
+services:
+  rivenforge-api:
+    build: .
+    image: rivenforge-api
+    container_name: rivenforge-api
+    ports:
+      - "47321:47321"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:47321/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

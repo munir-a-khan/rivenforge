@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.6
+
+- Added a Windows.Graphics.Capture (WGC) backend that reads the Warframe window even while it is covered, unfocused, or on a second monitor. Selectable via `POST /capture/analyze?backend=wgc` and a "Background capture" toggle on Manual Analyze.
+- Added `GET /capture/status` (reports window state + available capture backends) and `POST /capture/input-probe` (non-destructive background-input test — hover only, never a click).
+- Established the background-input boundary empirically: Warframe ignores posted input, so background analysis works but automated rolling stays foreground-only. No injection or input drivers used.
+- Registered the `Ctrl+Shift+Q` emergency-stop hotkey globally through the Tauri shell so it fires while the game has focus.
+- OCR fixes: `Weapon Recoil` alias + inverted Recoil polarity (+recoil is a negative, -recoil is a positive); generalized the `(x# for ...)` decorator strip so `Fire Rate (x2 for Bows)` and similar are parsed instead of dropped.
+- Sourced the full 34-stat picker from `GET /stats` (both positive and negative pickers) instead of a trimmed hardcoded list.
+- Fixed CORS so the Tauri 2 Windows webview origin (`https://tauri.localhost`) can reach the sidecar.
+- Added a headless Linux API container (`Dockerfile`, `docker-compose.yml`, `requirements-api.txt`) for the cross-platform half of the API.
+- Added `run-rivenforge.bat` and `run-rivenforge-dev.bat` launchers.
+
 ## 0.1.5
 
 - Aligned desktop, API diagnostics, and package metadata for public repository handoff.

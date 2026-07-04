@@ -237,6 +237,22 @@ label {
   margin: 12px 0 6px;
 }
 
+label.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-lo);
+  cursor: pointer;
+}
+
+label.checkbox-row input {
+  width: auto;
+  min-height: 0;
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
 input,
 select,
 textarea {

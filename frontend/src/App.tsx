@@ -633,6 +633,7 @@ function ManualAnalyze() {
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [captureStatus, setCaptureStatus] = useState<string>("");
   const [liveCaptureBusy, setLiveCaptureBusy] = useState(false);
+  const [backgroundCapture, setBackgroundCapture] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function acceptFile(next: File) {
@@ -652,17 +653,30 @@ function ManualAnalyze() {
   }
 
   async function analyzeLiveCapture() {
+    const backend = backgroundCapture ? "wgc" : "auto";
     setLiveCaptureBusy(true);
-    setCaptureStatus("Capturing visible Warframe frame...");
+    setCaptureStatus(
+      backgroundCapture
+        ? "Capturing Warframe window (works even covered/unfocused)..."
+        : "Capturing visible Warframe frame...",
+    );
     try {
       const status = await api.captureStatus();
+      if (backgroundCapture && status.found && status.minimized) {
+        setCaptureStatus("Warframe is minimized — restore it (it can stay unfocused) and retry. No backend can read a minimized window.");
+        return;
+      }
+      if (backgroundCapture && !status.capture_backends?.windows_graphics_capture) {
+        setCaptureStatus("Background capture (WGC) is unavailable on this build. Falling back to visible-desktop capture.");
+      }
       const notes = status.notes.length ? ` ${status.notes.join(" ")}` : "";
-      setCaptureStatus(
-        status.found
-          ? `Warframe found. Visible: ${status.visible ? "yes" : "no"}. Focused: ${status.foreground ? "yes" : "no"}.${notes}`
-          : `Warframe not found.${notes}`,
-      );
-      setResult(await api.analyzeLiveCapture(cropMode));
+      const header = status.found
+        ? `Warframe found. Visible: ${status.visible ? "yes" : "no"}. Focused: ${status.foreground ? "yes" : "no"}.`
+        : "Warframe not found.";
+      setCaptureStatus(`${header}${notes}`);
+      const analysis = await api.analyzeLiveCapture(cropMode, backend);
+      setResult(analysis);
+      setCaptureStatus(`${header} Captured via ${analysis.capture_path}.${notes}`);
     } catch (error) {
       setCaptureStatus(error instanceof Error ? error.message : "Live capture failed.");
     } finally {
@@ -697,6 +711,14 @@ function ManualAnalyze() {
             {liveCaptureBusy ? "Capturing..." : "Capture Warframe"}
           </button>
         </div>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={backgroundCapture}
+            onChange={(e) => setBackgroundCapture(e.target.checked)}
+          />
+          Background capture (WGC) — reads the Warframe window even while it&apos;s covered or unfocused
+        </label>
         <label>Crop mode</label>
         <select value={cropMode} onChange={(e) => setCropMode(e.target.value as CropMode)}>
           <option value="new_card">New card</option>

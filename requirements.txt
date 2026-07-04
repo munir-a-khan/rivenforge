@@ -1,6 +1,7 @@
 PyQt5>=5.15
 mss>=9.0
 dxcam>=0.3        # DXGI Desktop Duplication fallback for Fullscreen Exclusive captures
+windows-capture>=2.0  # Windows.Graphics.Capture: per-window capture for covered/unfocused Warframe
 pyautogui>=0.9.54
 easyocr>=1.7
 chromadb>=0.4

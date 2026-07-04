@@ -23,7 +23,13 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
-import mss
+
+try:
+    import mss
+    HAS_MSS = True
+except Exception:  # pragma: no cover - headless/container import guard
+    mss = None  # type: ignore[assignment]
+    HAS_MSS = False
 
 try:
     import win32api
@@ -39,6 +45,8 @@ try:
 except ImportError:
     dxcam = None  # type: ignore[assignment]
     HAS_DXCAM = False
+
+from core import capture_wgc
 
 
 def _warframe_window_rect():
@@ -62,9 +70,9 @@ def warframe_window_status() -> dict[str, Any]:
         "foreground": False,
         "rect": None,
         "capture_backends": {
-            "mss": True,
+            "mss": HAS_MSS,
             "dxcam": HAS_DXCAM,
-            "windows_graphics_capture": False,
+            "windows_graphics_capture": capture_wgc.is_available(),
         },
         "notes": [],
     }
@@ -86,12 +94,28 @@ def warframe_window_status() -> dict[str, Any]:
         "rect": rect,
     })
 
+    status["hwnd"] = int(hwnd)
+
     if status["minimized"]:
-        status["notes"].append("Warframe is minimized; desktop capture cannot see minimized frames.")
+        status["notes"].append(
+            "Warframe is minimized; NO backend (mss, DXGI, or WGC) can capture a "
+            "minimized window — there is no composed surface to read."
+        )
     elif not status["foreground"]:
-        status["notes"].append("Warframe is not focused; OCR can still work if the window remains visible.")
+        if capture_wgc.is_available():
+            status["notes"].append(
+                "Warframe is unfocused; the WGC backend can capture it even if it is "
+                "covered by another window. mss/DXGI only work if it is uncovered."
+            )
+        else:
+            status["notes"].append(
+                "Warframe is unfocused; OCR works if the window stays uncovered. "
+                "Install windows-capture for covered-window (WGC) capture."
+            )
     if not HAS_DXCAM:
         status["notes"].append("dxcam is not installed; fullscreen/DXGI fallback is unavailable.")
+    if not capture_wgc.is_available():
+        status["notes"].append("windows-capture is not installed; covered-window (WGC) capture is unavailable.")
     return status
 
 
@@ -233,21 +257,52 @@ def _capture_via_dxgi(virtual_rect: tuple[int, int, int, int] | None) -> Image.I
     return Image.fromarray(arr)
 
 
-def grab_frame(monitor_index: int = 0) -> Image.Image:
-    """
-    Capture the screen.
+def _capture_via_wgc() -> Image.Image | None:
+    """Capture the Warframe window via WGC, or None if unavailable/failed."""
+    if not (HAS_WIN32 and capture_wgc.is_available()):
+        return None
+    hwnd = win32gui.FindWindow(None, "Warframe")
+    if not hwnd or win32gui.IsIconic(hwnd):
+        return None  # minimized windows have no surface for any backend
+    return capture_wgc.capture_window(hwnd)
 
-    Tries mss first (fast, works for Windowed / Borderless Windowed). If
-    that returns a black frame — average brightness below threshold,
-    which is what GDI/BitBlt returns when Warframe is in Fullscreen
-    Exclusive — falls back to dxcam (DXGI Desktop Duplication), which
-    reads the display output directly and works in all display modes.
+
+def grab_frame(monitor_index: int = 0, backend: str = "auto") -> Image.Image:
+    """
+    Capture the screen (or the Warframe window).
+
+    ``backend``:
+      - ``"auto"`` (default): mss first (fast, Windowed / Borderless
+        Windowed), fall back to dxcam / DXGI Desktop Duplication if the
+        frame is black (Fullscreen Exclusive). Best for foreground /
+        visible-and-uncovered Warframe.
+      - ``"wgc"``: capture the Warframe *window* via Windows.Graphics.
+        Capture. Works even when the window is covered by another app,
+        unfocused, or on a second monitor — the background scenario. Falls
+        back to the ``"auto"`` ladder if WGC is unavailable or fails.
 
     The returned image carries:
       - ``info["brightness"]``    average luminance 0–255
       - ``info["black_frame"]``   True if brightness is below threshold
-      - ``info["capture_path"]``  "mss" | "dxgi" | "mss(dark)"
+      - ``info["capture_path"]``  "mss" | "dxgi" | "mss(dark)" | "wgc"
     """
+    if backend == "wgc":
+        wgc_img = _capture_via_wgc()
+        if wgc_img is not None:
+            brightness, p95 = _brightness_stats(wgc_img)
+            wgc_img.info["brightness"] = brightness
+            wgc_img.info["brightness_p95"] = p95
+            wgc_img.info["black_frame"] = _is_black_frame(wgc_img)
+            wgc_img.info["capture_path"] = "wgc"
+            return wgc_img
+        # WGC unavailable/failed — fall through to the auto ladder below.
+
+    if not HAS_MSS:
+        raise RuntimeError(
+            "Screen capture is unavailable: the 'mss' backend is not installed. "
+            "Live/desktop capture requires a Windows host with a display."
+        )
+
     rect = _warframe_window_rect()
     with mss.mss() as sct:
         if rect:

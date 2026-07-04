@@ -58,11 +58,14 @@ export interface WeaponEntry {
   notes?: string;
 }
 
+export type CapturePath = "mss" | "dxgi" | "mss(dark)" | "wgc";
+export type CaptureBackend = "auto" | "wgc";
+
 export interface AnalyzeResponse {
   parse: ParsedRoll;
   decision: RuleResult;
   confidence: number;
-  capture_path: "mss" | "dxgi" | "mss(dark)";
+  capture_path: CapturePath;
   brightness: number;
   brightness_p95: number;
   raw_image_size: [number, number] | null;
@@ -77,6 +80,7 @@ export interface CaptureStatus {
   minimized: boolean;
   foreground: boolean;
   rect: [number, number, number, number] | null;
+  hwnd: number | null;
   capture_backends: Record<string, boolean>;
   notes: string[];
 }
@@ -225,10 +229,11 @@ export const api = {
     return request<AnalyzeResponse>("/analyze", { method: "POST", body });
   },
   captureStatus: () => request<CaptureStatus>("/capture/status"),
-  analyzeLiveCapture: (cropMode: CropMode) => {
+  analyzeLiveCapture: (cropMode: CropMode, backend: CaptureBackend = "auto") => {
     const body = new FormData();
     body.append("crop_mode", cropMode);
     body.append("monitor_index", "0");
+    body.append("backend", backend);
     return request<AnalyzeResponse>("/capture/analyze", { method: "POST", body });
   },
   startRoll: (cfg: UserConfig) =>

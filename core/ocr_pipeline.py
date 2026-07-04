@@ -30,9 +30,10 @@ class ImageSource(Protocol):
 @dataclass(frozen=True)
 class ScreenCaptureSource:
     monitor_index: int = 0
+    backend: str = "auto"
 
     def capture(self) -> Image.Image:
-        return grab_frame(self.monitor_index)
+        return grab_frame(self.monitor_index, backend=self.backend)
 
 
 @dataclass(frozen=True)

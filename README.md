@@ -7,11 +7,13 @@ The goal is reliability first: the app should be useful without touching the gam
 ## What It Does
 
 - Analyzes saved riven screenshots or pasted clipboard images.
+- Captures and analyzes the live Warframe window — including while it is **covered or unfocused** — via Windows.Graphics.Capture.
 - Parses riven stat lines into structured positive and negative stats.
 - Evaluates rolls against user-defined profiles instead of hardcoded "good roll" guesses.
 - Explains why a roll matched, failed, or needs review.
 - Uses a local RAG index as extra context for weapon tier/stat suggestions.
 - Bundles the Python API as `rivenforge-api.exe` inside the Tauri desktop app.
+- Ships a headless Linux container for the cross-platform half of the API (rules, RAG, manual-OCR analysis).
 - Keeps automation optional and separate from OCR, rules, and profile testing.
 
 ## Current App
@@ -137,6 +139,37 @@ At runtime, RAG combines several advisory signals:
 
 Important: RAG is context, not control. The deterministic profile/rule engine owns the keep/roll decision. Market data can help explain value, but it should not override your chosen profile.
 
+## Background Capture And The Input Boundary
+
+rivenforge can **read** the Warframe window in the background — while you are
+focused on another app, and even while the window is covered by something else
+or sitting on a second monitor. It cannot **click** in the background, and that
+boundary was established empirically, not assumed.
+
+### Capture backends (Windows host)
+
+| Backend | Mechanism | Reaches |
+|---|---|---|
+| `mss` | GDI / BitBlt of the window region | foreground / visible, uncovered |
+| `dxgi` | dxcam Desktop Duplication | Fullscreen Exclusive; used when the mss frame is black |
+| `wgc` | Windows.Graphics.Capture on the Warframe **window** | the window even when **covered / unfocused / on a 2nd monitor** |
+
+`POST /capture/analyze` with `backend=wgc` (or the "Background capture" checkbox
+on Manual Analyze) selects the window-targeted path. WGC is the same
+Microsoft-sanctioned API OBS's Window Capture uses — **no process injection, no
+hooks**. The one hard OS limit shared by every backend: a *minimized* window has
+no composed surface and cannot be captured.
+
+### Why rolling stays foreground-only
+
+Automated clicking in the background was tested and does not work: Warframe reads
+raw hardware input, so posted (`PostMessage`) events are ignored, and hardware /
+`SendInput` events are routed by Windows to the focused window. `POST
+/capture/input-probe` performs a non-destructive hover test (no click, no kuva
+spent) so this is verifiable rather than a claim. rivenforge deliberately does
+**not** cross into DLL injection or input drivers to force the issue. Net result:
+**background analysis works; automated rolling stays foreground-only.**
+
 ## API Surface
 
 The local sidecar exposes endpoints such as:
@@ -148,6 +181,9 @@ The local sidecar exposes endpoints such as:
 - `GET /weapons`
 - `GET /weapons/{name}/suggested`
 - `POST /analyze`
+- `GET /capture/status`
+- `POST /capture/analyze` (`backend=auto|wgc`)
+- `POST /capture/input-probe`
 - `POST /roll/start`
 - `POST /roll/stop`
 - `GET /rag/status`
@@ -179,6 +215,32 @@ Run only the API sidecar:
 ```powershell
 python api_sidecar.py
 ```
+
+## Launchers
+
+Two Windows `.bat` files at the repo root:
+
+- `run-rivenforge.bat` — launch the installed desktop app.
+- `run-rivenforge-dev.bat` — run the sidecar from source, then launch the
+  installed app against it. The Tauri shell reuses an already-listening sidecar,
+  so this exercises the latest `core/` and `api/` code **without a rebuild**.
+  Pass `--api-only` to start just the sidecar for endpoint testing.
+
+## Headless API Container
+
+`Dockerfile` and `docker-compose.yml` build a Linux image that serves the
+**cross-platform** half of the API (rules, RAG, config, weapons, stats, and
+manual-OCR analysis) using `requirements-api.txt`:
+
+```bash
+docker compose up --build
+curl http://localhost:47321/health
+```
+
+Live screen/window capture and image OCR are Windows-only (`winocr`, `dxcam`,
+Windows.Graphics.Capture) and are not available in the container — those
+endpoints degrade gracefully (`/capture/status` reports `available: false`)
+instead of crashing.
 
 ## Build Windows Installers
 
@@ -218,7 +280,7 @@ Screenshots and diagnostics stay local unless the user explicitly exports and sh
 
 ## Roadmap
 
-- Improve OCR reliability while Warframe is not the focused window.
+- ~~Improve OCR reliability while Warframe is not the focused window.~~ Done via the WGC background-capture backend.
 - Expand fixture-based OCR regression tests.
 - Finish Tauri feature parity before removing the PyQt GUI.
 - Improve profile import/export and sample profiles.
