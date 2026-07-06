@@ -24,6 +24,10 @@ class RollerThread(threading.Thread):
         roll_limit: int = 100,
         rag_threshold: float = 0.6,
         animation_wait: float = 2.5,
+        stat_priority: list | None = None,
+        neg_priority: list | None = None,
+        roll_until_match: bool = False,
+        confirm_reads: int = 3,
         on_roll: Callable | None = None,
         on_done: Callable | None = None,
         on_error: Callable | None = None,
@@ -35,6 +39,20 @@ class RollerThread(threading.Thread):
         self.roll_limit     = roll_limit
         self.rag_threshold  = rag_threshold
         self.animation_wait = animation_wait
+        # Per-weapon manual stat preference order (highest first). Biases the
+        # keep/revert score toward the user's favoured stat combination.
+        self.stat_priority  = list(stat_priority or [])
+        # Per-weapon NEGATIVE preference order (most-tolerable first). Among
+        # rolls whose negative is already acceptable, biases toward the one
+        # with the least-bad negative (or no negative at all).
+        self.neg_priority   = list(neg_priority or [])
+        # roll_until_match: when True, only KEEP a roll that FULLY matches a
+        # profile; every other roll is reverted (no "ratchet to best-so-far").
+        self.roll_until_match = roll_until_match
+        # confirm_reads: how many OCR reads of the SAME rolled card must agree
+        # before we trust the read for a keep/revert decision. Re-reading is
+        # free (no kuva spent), so this is a cheap correctness guard. 1 = off.
+        self.confirm_reads = max(1, int(confirm_reads))
         self.on_roll        = on_roll
         self.on_done        = on_done
         self.on_error       = on_error
@@ -92,7 +110,11 @@ class RollerThread(threading.Thread):
                 if automation.wait_for_animation(self.animation_wait, sf): break
 
                 # Then poll until CONFIRM button is visible — means two-card
-                # view is fully rendered and stats are readable
+                # view is fully rendered and stats are readable. Poll quickly
+                # (0.15s) so we react the instant the card appears rather than
+                # sitting through a fixed wait — this is the main per-roll
+                # latency win and is safe (it only reads sooner, never earlier
+                # than the button actually exists).
                 _confirm_visible = False
                 _poll_deadline   = time.monotonic() + 8.0
                 while time.monotonic() < _poll_deadline:
@@ -100,27 +122,44 @@ class RollerThread(threading.Thread):
                     if _find_on_screen("CONFIRM"):
                         _confirm_visible = True
                         break
-                    time.sleep(0.4)
+                    time.sleep(0.15)
                 if sf.is_set(): break
 
                 # Small extra pause to let the card text fully settle after
                 # CONFIRM appears (prevents partial OCR reads)
                 if automation.wait_for_dialog(0.4, sf): break
 
-                # ── 4. OCR the new card (right side in two-card view) ─────────
-                frame      = grab_frame()
-                stat_lines = find_riven_stats(frame)
-                parsed     = parser.parse(stat_lines)
+                # ── 4. OCR the new card — triple-check consensus ─────────────
+                # Read the Warframe *window* via WGC, not a screen region: an
+                # overlay on top (tooltip, the rivenforge window itself) won't
+                # corrupt the read, and it targets the right window explicitly.
+                # WGC falls back to the mss/DXGI ladder when unavailable.
+                #
+                # We read the SAME already-rolled card `confirm_reads` times and
+                # require them to agree on the stat set before trusting it. A
+                # re-read costs no kuva (we are not cycling), so this is a free
+                # correctness guard against flaky/bled OCR. If the reads never
+                # agree, the roll is untrusted and MUST be reverted, never kept.
+                from core.consensus import read_until_consensus
 
-                # Retry up to 2 more times if stats are missing
-                _retry = 0
-                while _retry < 2 and not parsed["positives"] and not parsed["negatives"]:
-                    if automation.wait_for_dialog(0.7, sf): break
-                    frame      = grab_frame()
-                    stat_lines = find_riven_stats(frame)
-                    parsed     = parser.parse(stat_lines)
-                    _retry    += 1
+                _last_frame = {"f": None}
+
+                # Default-arg binding of the frame holder keeps this closure
+                # free of the loop variable (and is evaluated once per read).
+                def _read_once(_holder=_last_frame):
+                    frame = grab_frame(backend="wgc")
+                    _holder["f"] = frame
+                    return parser.parse(find_riven_stats(frame))
+
+                consensus = read_until_consensus(
+                    _read_once,
+                    need=self.confirm_reads,
+                    should_stop=sf.is_set,
+                )
                 if sf.is_set(): break
+                parsed = consensus.parsed
+                frame  = _last_frame["f"]
+                consensus_ok = consensus.agreed
 
                 # Black-frame detection: both the GDI/BitBlt path AND the
                 # DXGI Desktop Duplication fallback returned black. That
@@ -146,9 +185,12 @@ class RollerThread(threading.Thread):
 
                 rag_score = rag_result.get("score", 0.0)
 
-                # Full accept: profile matched + RAG threshold met
+                # Full accept: profile matched + RAG threshold met + the read
+                # was CONFIRMED by the triple-check. An unstable read (the 3
+                # reads disagreed) is never trustworthy enough to keep on.
                 full_accept = (
-                    rule_result["accept"]
+                    consensus_ok
+                    and rule_result["accept"]
                     and (self.rag_threshold == 0.0 or rag_score >= self.rag_threshold)
                 )
 
@@ -162,11 +204,19 @@ class RollerThread(threading.Thread):
                 # kept as an extra guard for full_accept gating.
                 melee_bonus = rag_result.get("melee_bonus", 0.0)
                 new_score   = rules.score_roll(parsed, self.profiles,
-                                               rag_score, melee_bonus)
+                                               rag_score, melee_bonus,
+                                               stat_priority=self.stat_priority,
+                                               neg_priority=self.neg_priority)
                 # Safety: market/RAG score may rank acceptable rolls, but it
                 # must never cause us to keep a roll that failed user rules.
+                #
+                # roll_until_match mode: never ratchet to a "best-so-far". Only
+                # a full profile match is worth keeping — everything else is
+                # reverted so the riven ends exactly on the roll the user wants.
                 is_better   = (
-                    (not ocr_failed)
+                    consensus_ok
+                    and (not self.roll_until_match)
+                    and (not ocr_failed)
                     and rule_result["accept"]
                     and (new_score > best_score)
                 )
@@ -181,6 +231,20 @@ class RollerThread(threading.Thread):
                 rag_result["new_score"]   = round(new_score, 2)
                 rag_result["best_score"]  = round(best_score, 2)
                 rag_result["is_better"]   = is_better
+                # Record the triple-check outcome so diagnostics show whether a
+                # revert was due to an unstable/disagreeing read.
+                rag_result.setdefault("notes", [])
+                if self.confirm_reads > 1:
+                    if consensus_ok:
+                        rag_result["notes"].append(
+                            f"consensus: {self.confirm_reads} reads agreed "
+                            f"(attempt {consensus.attempts}, {consensus.reads_taken} reads)"
+                        )
+                    else:
+                        rag_result["notes"].append(
+                            f"consensus FAILED: {self.confirm_reads} reads never agreed "
+                            f"after {consensus.reads_taken} reads → reverting (untrusted read)"
+                        )
 
                 if self.on_roll:
                     self.on_roll(roll_num, parsed, rule_result, rag_result,
@@ -262,13 +326,17 @@ class RollerThread(threading.Thread):
 
         except Exception as e:
             import traceback
+            if self.on_error:
+                self.on_error(f"{e}\n{traceback.format_exc()}")
+        finally:
+            # Bulletproof: whatever path the thread exits by (stop, finish,
+            # crash), never leave ALT / a mouse button stuck — that is what
+            # wedges the Windows taskbar after a session.
             try:
                 from core.automation import release_input_state
                 release_input_state()
             except Exception:
                 pass
-            if self.on_error:
-                self.on_error(f"{e}\n{traceback.format_exc()}")
 
     def _finish(self, reason: str):
         try:

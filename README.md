@@ -4,6 +4,18 @@ rivenforge is a Windows-first Warframe riven analysis desktop app. It combines a
 
 The goal is reliability first: the app should be useful without touching the game, testable without OCR, and safe enough that bad OCR returns `REVIEW` instead of making a wrong roll decision.
 
+## Screenshots
+
+| Roll Log | Profiles |
+|---|---|
+| ![Roll Log](docs/screenshots/01-roll-log.png) | ![Profiles](docs/screenshots/02-profiles.png) |
+
+| Stat hierarchy + triple-check | Manual Analyze |
+|---|---|
+| ![Stat hierarchy and triple-check](docs/screenshots/03-hierarchy-and-triple-check.png) | ![Manual Analyze](docs/screenshots/05-manual-analyze.png) |
+
+<p align="center"><img src="docs/screenshots/04-settings.png" width="70%" alt="Settings" /></p>
+
 ## What It Does
 
 - Analyzes saved riven screenshots or pasted clipboard images.
@@ -15,6 +27,26 @@ The goal is reliability first: the app should be useful without touching the gam
 - Bundles the Python API as `rivenforge-api.exe` inside the Tauri desktop app.
 - Ships a headless Linux container for the cross-platform half of the API (rules, RAG, manual-OCR analysis).
 - Keeps automation optional and separate from OCR, rules, and profile testing.
+
+## Roll-Decision Safeguards
+
+Because a wrong KEEP wastes a real roll, several independent guards sit between OCR
+and the keep/revert decision:
+
+- **Physical-limit guard.** A real riven has at most 3 positives and 1 negative. Any
+  read with more is marked `INVALID` (usually the two-card compare view bleeding the
+  equipped riven in) and can never be kept.
+- **Triple-check consensus.** Before acting, the rolled card is read several times
+  (configurable, default 3) and must agree on the stat set. Re-reading costs no kuva,
+  so an unstable/flaky read is retried until stable — or reverted as untrusted.
+- **Recoil polarity + decorator handling.** `+Recoil` is treated as a negative and
+  `-Recoil` as a positive; `(x2 for Bows)` / `(x2 for Heavy Attacks)` style annotations
+  are stripped so the stat still resolves.
+- **Per-weapon stat hierarchies.** Manual, drag-orderable positive and negative
+  preference lists (auto-seeded from your profiles) tiebreak which acceptable roll wins.
+- **Focus-safe automation.** The roller never steals focus back if you alt-tab to
+  another app — it pauses until you return — and always releases modifier keys so the
+  taskbar can't wedge.
 
 ## Current App
 

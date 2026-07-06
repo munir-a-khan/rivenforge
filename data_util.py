@@ -22,6 +22,11 @@ _DEFAULTS = {
     "roll_limit":    100,
     "rag_threshold": 0.60,
     "animation_wait": 2.5,
+    "roll_until_match": False,
+    # Per-weapon manual stat preference order: {weapon_name: [stat, ...]}.
+    # Highest-priority stat first. Biases scoring toward the user's favoured
+    # combination for that specific weapon.
+    "stat_hierarchies": {},
     # 1920x1080 Borderless Fullscreen estimates — recalibrate in Settings
     # Flow: CYCLE → YES(confirm kuva) → [animation] → CONFIRM → YES/NO(keep/revert)
     "button_coords": {

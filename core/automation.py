@@ -60,16 +60,52 @@ def _find_app_hwnds() -> list[int]:
     return results
 
 
+def _foreground_is_user_elsewhere(wf_hwnd: int) -> bool:
+    """
+    True when the user has deliberately switched to some OTHER application
+    (a browser, Discord, the taskbar, etc.) — i.e. the foreground window is
+    neither Warframe nor one of our own windows.
+
+    The roller uses this to PAUSE instead of yanking focus back. Stealing
+    focus every cycle was the alt-tab lockout: the moment you switched away,
+    the next roll dragged you back into the game.
+    """
+    fg = win32gui.GetForegroundWindow()
+    if not fg or fg == wf_hwnd:
+        return False
+    if fg in _find_app_hwnds():
+        return False   # our own window — fine to proceed (start-of-session)
+    return True
+
+
 def activate_warframe() -> bool:
     """
-    Minimize our app, then bring Warframe to foreground.
-    Returns True if Warframe is now the foreground window.
+    Ensure Warframe is the foreground window so clicks land on it.
+
+    Returns:
+      True  — Warframe is foreground and ready to be clicked.
+      False — the user has switched to another app; we did NOT steal focus.
+              The caller should pause and retry, not click.
+
+    Behavior:
+      - If Warframe is already foreground, do nothing (no minimize, no
+        alt-key trick, no SetForegroundWindow). This removes the per-cycle
+        focus thrash that fought the user and could leave ALT stuck.
+      - If the user is in another app, return False without touching focus.
+      - Only when the foreground is our own window (session start) do we
+        minimize ourselves and bring Warframe forward.
     """
     hwnd = _get_wf_hwnd()
     if not hwnd:
         return False
 
-    # Minimize our own windows so Qt can't steal focus back
+    if win32gui.GetForegroundWindow() == hwnd:
+        return True   # already focused — nothing to do, don't thrash focus
+
+    if _foreground_is_user_elsewhere(hwnd):
+        return False  # user is elsewhere on purpose — pause, never steal
+
+    # Foreground is our own window (or desktop): OK to bring Warframe forward.
     for h in _find_app_hwnds():
         try:
             win32gui.ShowWindow(h, win32con.SW_MINIMIZE)
@@ -78,12 +114,16 @@ def activate_warframe() -> bool:
 
     time.sleep(0.15)
 
-    # Alt-key unlock trick then SetForegroundWindow
-    _user32.keybd_event(VK_MENU, 0, 0, 0)
-    _user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
-    time.sleep(0.05)
-    _user32.SetForegroundWindow(hwnd)
-    time.sleep(0.3)
+    # Alt-key unlock trick then SetForegroundWindow. Guaranteed ALT release
+    # via finally so a stuck modifier can't wedge the taskbar afterwards.
+    try:
+        _user32.keybd_event(VK_MENU, 0, 0, 0)
+        _user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.05)
+        _user32.SetForegroundWindow(hwnd)
+        time.sleep(0.3)
+    finally:
+        _user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
 
     return win32gui.GetForegroundWindow() == hwnd
 
@@ -241,8 +281,23 @@ def _visual_click(keyword: str, stop_flag=None, timeout: float = 10.0,
 # ── Public rolling API ───────────────────────────────────────────────────────
 
 def press_cycle(stop_flag=None) -> bool:
-    """Step 1: Minimize app, activate Warframe, click CYCLE FOR KUVA."""
-    activate_warframe()
+    """
+    Step 1: ensure Warframe has focus, then click CYCLE FOR KUVA.
+
+    If the user has alt-tabbed to another app, PAUSE here (polling, never
+    stealing focus) until they return to Warframe — or press stop. This is
+    what lets you leave the game while a session is 'running' instead of
+    being dragged back every roll.
+    """
+    while True:
+        if stop_flag is not None and stop_flag.is_set():
+            return True
+        if activate_warframe():
+            break
+        # User is in another app on purpose — wait and re-check. We do not
+        # click and do not steal focus while paused.
+        if _interruptible_sleep(0.6, stop_flag):
+            return True
     return _visual_click("CYCLE FOR", stop_flag)
 
 

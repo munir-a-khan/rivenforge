@@ -73,8 +73,14 @@ button {
   width: 42px;
   height: 42px;
   border-radius: 8px;
-  background: linear-gradient(135deg, var(--violet), var(--magenta));
   font-weight: 800;
+}
+
+.brand-mark img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  display: block;
 }
 
 .brand strong {
@@ -252,6 +258,85 @@ label.checkbox-row input {
   margin-top: 2px;
   flex: 0 0 auto;
 }
+
+.hierarchy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.hierarchy-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2, rgba(255, 255, 255, 0.03));
+}
+
+.hierarchy-rank {
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  color: var(--accent-text, #e879f9);
+  min-width: 16px;
+  text-align: center;
+}
+
+.hierarchy-name {
+  flex: 1 1 auto;
+  font-size: 13px;
+}
+
+.hierarchy-row .icon-button {
+  padding: 2px 8px;
+  min-height: 0;
+}
+
+.hierarchy-row .icon-button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.hierarchy-add {
+  align-self: flex-start;
+  max-width: 220px;
+}
+
+/* Two side-by-side hierarchy columns (positives / negatives). */
+.hierarchy-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin: 6px 0 10px;
+}
+
+@media (max-width: 780px) {
+  .hierarchy-cols { grid-template-columns: 1fr; }
+}
+
+/* Drag-and-drop affordances. */
+.hierarchy-row {
+  cursor: grab;
+}
+
+.hierarchy-row.dragging {
+  opacity: 0.45;
+  border-color: var(--accent-text, #e879f9);
+}
+
+.hierarchy-grip {
+  color: var(--text-lo, #a1a1aa);
+  font-size: 12px;
+  letter-spacing: -2px;
+  cursor: grab;
+  user-select: none;
+}
+
+/* Tint the rank chip by list kind so the two columns read at a glance. */
+.hierarchy-negative .hierarchy-rank { color: #f87171; }
+.hierarchy-positive .hierarchy-rank { color: #34d399; }
 
 input,
 select,

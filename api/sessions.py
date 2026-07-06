@@ -31,6 +31,10 @@ class RollSessionManager:
             roll_limit=payload.get("roll_limit", 100),
             rag_threshold=payload.get("rag_threshold", 0.6),
             animation_wait=payload.get("animation_wait", 2.5),
+            stat_priority=payload.get("stat_priority", []),
+            neg_priority=payload.get("neg_priority", []),
+            roll_until_match=payload.get("roll_until_match", False),
+            confirm_reads=payload.get("confirm_reads", 3),
             on_roll=lambda roll_num, parsed, rule_result, rag_result, accepted: event_bus.publish_threadsafe({
                 "kind": "roll",
                 "session_id": session_id,

@@ -89,9 +89,24 @@ const emptyConfig: UserConfig = {
   profiles: [],
   roll_limit: 25,
   rag_threshold: 0,
-  animation_wait: 2.5
+  animation_wait: 2.5,
+  roll_until_match: false,
+  confirm_reads: 3,
+  stat_hierarchies: {},
+  neg_hierarchies: {}
 };
 const ONBOARDING_KEY = "rivenforge.onboardingComplete.v1";
+
+/** Order-preserving de-dupe (case-insensitive) used to seed hierarchies. */
+function uniq(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of items) {
+    const k = it.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(it); }
+  }
+  return out;
+}
 
 function App() {
   const [route, setRoute] = useState<RouteId>("rolls");
@@ -302,7 +317,7 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">RF</div>
+          <div className="brand-mark"><img src="/logo.png" alt="rivenforge" /></div>
           <div>
             <strong>rivenforge</strong>
             <span>local analyzer</span>
@@ -477,6 +492,28 @@ function Profiles({
     api.weapons(config.weapon_type).then(setWeapons).catch(() => setWeapons([]));
   }, [config.weapon_type]);
 
+  // Auto-seed the per-weapon hierarchies from the current profiles: positives
+  // from every profile's desired_positives, negatives from acceptable_negatives.
+  // Only seeds when this weapon has no saved order yet, so it never clobbers a
+  // hand-dragged list. The user can then just drag to reorder.
+  useEffect(() => {
+    const w = config.weapon;
+    if (!w) return;
+    const posSeed = uniq(config.profiles.flatMap((p) => p.desired_positives ?? []));
+    const negSeed = uniq(config.profiles.flatMap((p) => p.acceptable_negatives ?? []));
+    const posStored = config.stat_hierarchies?.[w];
+    const negStored = config.neg_hierarchies?.[w];
+    const needPos = (!posStored || posStored.length === 0) && posSeed.length > 0;
+    const needNeg = (!negStored || negStored.length === 0) && negSeed.length > 0;
+    if (!needPos && !needNeg) return;
+    setConfig({
+      ...config,
+      stat_hierarchies: needPos ? { ...(config.stat_hierarchies ?? {}), [w]: posSeed } : config.stat_hierarchies,
+      neg_hierarchies: needNeg ? { ...(config.neg_hierarchies ?? {}), [w]: negSeed } : config.neg_hierarchies
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.weapon, config.profiles]);
+
   function updateProfile(index: number, profile: RollProfile) {
     const next = { ...config, profiles: config.profiles.map((p, i) => (i === index ? profile : p)) };
     setConfig(next);
@@ -514,9 +551,12 @@ function Profiles({
       <div className="panel wide">
         <PanelTitle icon={<SlidersHorizontal />} title="Profiles" />
         <div className="profile-list">
+          {/* key must be stable while typing: keying on profile.name remounts
+              the card (and drops input focus) on EVERY keystroke of a rename.
+              ProfileCard is fully controlled, so an index key is safe. */}
           {config.profiles.map((profile, index) => (
             <ProfileCard
-              key={`${profile.name}-${index}`}
+              key={index}
               profile={profile}
               statOptions={statOptions}
               onChange={(next) => updateProfile(index, next)}
@@ -552,8 +592,127 @@ function Profiles({
         <input type="number" step="0.05" value={config.rag_threshold} onChange={(e) => setConfig({ ...config, rag_threshold: Number(e.target.value) })} />
         <label>Animation wait</label>
         <input type="number" step="0.25" value={config.animation_wait} onChange={(e) => setConfig({ ...config, animation_wait: Number(e.target.value) })} />
+        <label>Confirm reads (triple-check)</label>
+        <input
+          type="number"
+          min={1}
+          max={7}
+          value={config.confirm_reads ?? 3}
+          onChange={(e) => setConfig({ ...config, confirm_reads: Math.max(1, Number(e.target.value)) })}
+        />
+        <p className="hint">Re-reads the rolled card this many times and only acts when they all agree. Re-reads cost no kuva. 1 disables it.</p>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={config.roll_until_match ?? false}
+            onChange={(e) => setConfig({ ...config, roll_until_match: e.target.checked })}
+          />
+          Roll until match — keep rolling and revert everything until a profile fully matches, then stop
+        </label>
+      </div>
+
+      <div className="panel wide">
+        <PanelTitle icon={<SlidersHorizontal />} title={`Preferred stat order${config.weapon ? ` — ${config.weapon}` : ""}`} />
+        <p className="hint">
+          Per-weapon tiebreakers. When several rolls are acceptable, the one whose stats sit higher wins —
+          matches stack. Auto-loaded from your profiles; drag rows to reorder. The negative list ranks
+          which downside you'd rather live with.
+        </p>
+        <div className="hierarchy-cols">
+          <div>
+            <label>Positives — best first</label>
+            <StatHierarchyEditor
+              kind="positive"
+              weapon={config.weapon}
+              order={config.weapon ? (config.stat_hierarchies?.[config.weapon] ?? []) : []}
+              statOptions={statOptions}
+              onChange={(next) => {
+                if (!config.weapon) return;
+                setConfig({ ...config, stat_hierarchies: { ...(config.stat_hierarchies ?? {}), [config.weapon]: next } });
+              }}
+            />
+          </div>
+          <div>
+            <label>Negatives — most tolerable first</label>
+            <StatHierarchyEditor
+              kind="negative"
+              weapon={config.weapon}
+              order={config.weapon ? (config.neg_hierarchies?.[config.weapon] ?? []) : []}
+              statOptions={statOptions}
+              onChange={(next) => {
+                if (!config.weapon) return;
+                setConfig({ ...config, neg_hierarchies: { ...(config.neg_hierarchies ?? {}), [config.weapon]: next } });
+              }}
+            />
+          </div>
+        </div>
+        <button className="secondary" onClick={() => saveConfig()}>
+          <Save size={16} />
+          Save
+        </button>
       </div>
     </section>
+  );
+}
+
+function StatHierarchyEditor({
+  weapon,
+  order,
+  statOptions,
+  kind,
+  onChange
+}: {
+  weapon: string;
+  order: string[];
+  statOptions: string[];
+  kind: "positive" | "negative";
+  onChange: (order: string[]) => void;
+}) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  if (!weapon) {
+    return <p className="empty-row">Select a weapon to set its preferred order.</p>;
+  }
+  const available = statOptions.filter((s) => !order.includes(s));
+
+  const reorder = (from: number, to: number) => {
+    if (from === to || from < 0 || to < 0 || from >= order.length || to >= order.length) return;
+    const next = [...order];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    onChange(next);
+  };
+
+  return (
+    <div className={`hierarchy hierarchy-${kind}`}>
+      {order.length === 0 && <p className="empty-row">Nothing yet — add one below.</p>}
+      {order.map((stat, i) => (
+        <div
+          className={`hierarchy-row${dragIndex === i ? " dragging" : ""}`}
+          key={stat}
+          draggable
+          onDragStart={() => setDragIndex(i)}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); if (dragIndex !== null) reorder(dragIndex, i); setDragIndex(null); }}
+          onDragEnd={() => setDragIndex(null)}
+          title="Drag to reorder"
+        >
+          <span className="hierarchy-grip" aria-hidden>⋮⋮</span>
+          <span className="hierarchy-rank">{i + 1}</span>
+          <span className="hierarchy-name">{stat}</span>
+          <button className="icon-button" onClick={() => onChange(order.filter((_, k) => k !== i))} title="Remove">✕</button>
+        </div>
+      ))}
+      {available.length > 0 && (
+        <select
+          className="hierarchy-add"
+          value=""
+          onChange={(e) => { if (e.target.value) onChange([...order, e.target.value]); }}
+        >
+          <option value="">+ Add stat…</option>
+          {available.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      )}
+    </div>
   );
 }
 

@@ -301,9 +301,55 @@ def evaluate(parsed_stats: ParsedRollDict | dict, profiles: list[RollProfileDict
     return evaluate_result(parsed, typed_profiles).to_legacy()  # type: ignore[return-value]
 
 
+# Each rank step in a user's per-weapon stat hierarchy is worth this many
+# points. With a 6-stat hierarchy the top stat adds ~90 and three top stats
+# stack to ~225 — enough to steer the "which acceptable roll is better?"
+# decision toward the user's preferred combination, but below one profile hit
+# (200) so it never overrides the actual rule match.
+_HIERARCHY_WEIGHT = 15.0
+
+
+def _hierarchy_bonus(rolled_pos: list[str], stat_priority: list[str] | None) -> float:
+    """
+    Reward rolls whose positive stats sit high in the user's manual, per-weapon
+    preference order. Rank 0 (top) is worth the most; matches stack so a roll
+    with several preferred stats scores well above one with a single low one.
+    """
+    if not stat_priority:
+        return 0.0
+    n = len(stat_priority)
+    bonus = 0.0
+    for rank, pref in enumerate(stat_priority):
+        if any(_stat_in_list(s, [pref]) for s in rolled_pos):
+            bonus += (n - rank) * _HIERARCHY_WEIGHT
+    return bonus
+
+
+def _neg_hierarchy_bonus(rolled_neg: list[str], neg_priority: list[str] | None) -> float:
+    """
+    Among rolls that already pass the rule (their negative is acceptable),
+    prefer the one whose negative sits highest in the user's per-weapon
+    NEGATIVE preference order — a 'negative tier list'. Rank 0 is the most
+    tolerable negative and adds the most. A roll with no negative gets the
+    full top bonus, since 'no negative' beats any acceptable negative.
+    """
+    if not neg_priority:
+        return 0.0
+    n = len(neg_priority)
+    if not rolled_neg:
+        return n * _HIERARCHY_WEIGHT   # no negative at all is best
+    best = 0.0
+    for rank, pref in enumerate(neg_priority):
+        if any(_stat_in_list(s, [pref]) for s in rolled_neg):
+            best = max(best, (n - rank) * _HIERARCHY_WEIGHT)
+    return best
+
+
 def score_roll(parsed_stats: ParsedRollDict | dict, profiles: list[RollProfileDict | dict],
                rag_score: float = 0.0,
-               melee_bonus: float = 0.0) -> float:
+               melee_bonus: float = 0.0,
+               stat_priority: list[str] | None = None,
+               neg_priority: list[str] | None = None) -> float:
     """
     Return a numeric score for this roll for comparison purposes.
     Higher = better. Used to decide whether to keep a new roll over the current one.
@@ -367,6 +413,7 @@ def score_roll(parsed_stats: ParsedRollDict | dict, profiles: list[RollProfileDi
         return -9999.0
 
     best_profile_score = -9999.0
+    hierarchy_bonus = _hierarchy_bonus(rolled_pos, stat_priority) + _neg_hierarchy_bonus(rolled_neg, neg_priority)
 
     for profile in profiles:
         desired = profile.get("desired_positives", [])
@@ -401,6 +448,7 @@ def score_roll(parsed_stats: ParsedRollDict | dict, profiles: list[RollProfileDi
                 hits * 200
                 + rag_score * 20
                 + melee_bonus * 80
+                + hierarchy_bonus       # user's per-weapon preferred-stat order
                 - len(bad_negs) * 800
                 - partial_penalty
             )

@@ -26,6 +26,17 @@ class RollStartRequest(BaseModel):
     roll_limit: int = 100
     rag_threshold: float = 0.6
     animation_wait: float = 2.5
+    # Ordered preferred-stat list for THIS weapon (highest first). Biases the
+    # keep/revert score toward the user's favoured stat combination.
+    stat_priority: list[str] = Field(default_factory=list)
+    # Ordered preferred-NEGATIVE list for THIS weapon (most tolerable first).
+    # Tiebreaks acceptable rolls toward the least-bad negative.
+    neg_priority: list[str] = Field(default_factory=list)
+    # When true, only a full profile match is kept; every other roll reverts.
+    roll_until_match: bool = False
+    # Number of OCR reads of the rolled card that must agree before a keep/
+    # revert decision is trusted (the triple-check). 1 disables it.
+    confirm_reads: int = 3
 
 
 class RollStartResponse(BaseModel):

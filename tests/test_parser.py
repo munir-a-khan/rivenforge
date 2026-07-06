@@ -2,6 +2,78 @@ from core.models import ParseStatus
 from core.parser import parse, parse_result
 
 
+def test_over_count_read_is_invalid_never_keepable():
+    # The exact Quatz Critapha mis-keep from the diagnostics: the real riven
+    # was only Heat + Critical Chance, but OCR bled the left (equipped) card's
+    # Fire Rate + Critical Damage in, producing FOUR positives. A riven can
+    # never have 4 positives, so this must be INVALID (-> REVIEW/REVERT),
+    # never eligible for KEEP.
+    result = parse_result([
+        "+87.8% Fire Rate",
+        "+1 16.7% Critical Damage Quatz Critapha",
+        "+110.4% *Heat",
+        "+187.7% Critical Chance",
+    ])
+    assert result.status == ParseStatus.INVALID
+    assert not result.is_complete_enough
+    assert any(i.code == "impossible_stat_count" for i in result.issues)
+
+
+def test_two_negatives_is_invalid():
+    # A riven has at most one negative; two genuine negatives means bleed.
+    # (Recoil is NOT used here: -recoil inverts to a positive.)
+    result = parse_result([
+        "+120% Critical Chance",
+        "-30% Fire Rate",
+        "-45% Damage",
+    ])
+    assert result.status == ParseStatus.INVALID
+
+
+def test_normal_three_positive_one_negative_still_ok():
+    # The cap must NOT reject a legitimate max-stat riven (3 pos + 1 neg).
+    result = parse_result([
+        "+120% Critical Chance",
+        "+90% Critical Damage",
+        "+80% Multishot",
+        "-30% Fire Rate",
+    ])
+    assert result.status == ParseStatus.OK
+
+
+def test_parse_recovers_negative_buried_in_ocr_bleed():
+    # Real failure from roll_debug.log: this nukor roll was wrongly ACCEPTED
+    # as a clean 2-positive because the "-35% Status Duration" negative was
+    # dropped — OCR read "-35a%" and the weapon name "Nukor Acriata" bled onto
+    # the line, diluting the whole-string fuzzy match below threshold.
+    result = parse_result([
+        "+387% Ammo Maximum x1 .22 Damage to Infested Fire Rate",
+        "-35a% status Duration Nukor Acriata",
+        "+57.8% Critical Damage",
+        "+126.5% Damage",
+    ])
+
+    pos_ids = [s.stat_id for s in result.positives]
+    neg = {s.stat_id: s.value for s in result.negatives}
+    # The negative must be recovered — this is what stops the bot keeping a bad roll.
+    assert neg.get("status_duration") == -35.0
+    # And the clean positives still parse; no phantom from the "x1 .22" garbage.
+    assert "critical_damage" in pos_ids
+    assert "damage" in pos_ids
+    assert "ammo_maximum" in pos_ids
+    assert "damage_to_infested" not in pos_ids  # orphan-decimal phantom is suppressed
+
+
+def test_parse_extracts_multiple_stats_from_one_merged_line():
+    # OCR sometimes merges two stats onto one line. Both must be recovered.
+    result = parse_result([
+        "+120% Critical Chance +80% Critical Damage",
+        "-30% Reload Speed",
+    ])
+    assert [s.stat_id for s in result.positives] == ["critical_chance", "critical_damage"]
+    assert [s.stat_id for s in result.negatives] == ["reload_speed"]
+
+
 def test_parse_result_normalizes_positive_and_negative_stats():
     result = parse_result([
         "+102.6% Status Chance",

@@ -97,10 +97,17 @@ def warframe_window_status() -> dict[str, Any]:
     status["hwnd"] = int(hwnd)
 
     if status["minimized"]:
-        status["notes"].append(
-            "Warframe is minimized; NO backend (mss, DXGI, or WGC) can capture a "
-            "minimized window — there is no composed surface to read."
-        )
+        if capture_wgc.is_available():
+            status["notes"].append(
+                "Warframe is minimized; a minimized window has no surface to "
+                "capture, so the WGC path will briefly restore it WITHOUT taking "
+                "focus (it may appear behind your current window) so it can be read."
+            )
+        else:
+            status["notes"].append(
+                "Warframe is minimized; no backend can read a minimized window and "
+                "WGC (which can restore-without-focus) is not installed."
+            )
     elif not status["foreground"]:
         if capture_wgc.is_available():
             status["notes"].append(
@@ -257,13 +264,46 @@ def _capture_via_dxgi(virtual_rect: tuple[int, int, int, int] | None) -> Image.I
     return Image.fromarray(arr)
 
 
-def _capture_via_wgc() -> Image.Image | None:
+# ShowWindow flag: restore a minimized window to its previous size WITHOUT
+# activating it (so we don't steal keyboard focus from whatever app the user
+# is actually using). SW_SHOWNOACTIVATE == 4.
+_SW_SHOWNOACTIVATE = 4
+
+
+def _restore_without_focus(hwnd: int) -> bool:
+    """
+    Un-minimize a window without activating it. Returns True if the window is
+    (now) not minimized.
+
+    A minimized DirectX window has no composed surface, so NO capture backend
+    can read it — this is an OS constraint, not a rivenforge limit. Rather than
+    fail, we restore the window with SW_SHOWNOACTIVATE, which brings its surface
+    back while leaving keyboard focus on the user's foreground app. The window
+    becomes visible (it may sit behind other windows), which is the price of
+    reading a "minimized" game non-invasively.
+    """
+    if not HAS_WIN32:
+        return False
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, _SW_SHOWNOACTIVATE)
+            time.sleep(0.12)  # let DWM recompose the surface
+        return not win32gui.IsIconic(hwnd)
+    except Exception:
+        return False
+
+
+def _capture_via_wgc(restore_if_minimized: bool = True) -> Image.Image | None:
     """Capture the Warframe window via WGC, or None if unavailable/failed."""
     if not (HAS_WIN32 and capture_wgc.is_available()):
         return None
     hwnd = win32gui.FindWindow(None, "Warframe")
-    if not hwnd or win32gui.IsIconic(hwnd):
-        return None  # minimized windows have no surface for any backend
+    if not hwnd:
+        return None
+    if win32gui.IsIconic(hwnd):
+        # Minimized: restore without focus so WGC has a surface to read.
+        if not restore_if_minimized or not _restore_without_focus(hwnd):
+            return None
     return capture_wgc.capture_window(hwnd)
 
 

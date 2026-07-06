@@ -99,6 +99,54 @@ def normalize_stat(raw: str, fuzzy_threshold: int = 70) -> StatRef | None:
     return StatRef(id=stat_id, name=name)
 
 
+def find_stat_in(text: str, threshold: int = 82) -> StatRef | None:
+    """
+    Find the best canonical stat *inside* a noisy text span.
+
+    Unlike ``normalize_stat`` (which fuzzy-matches the WHOLE string and so
+    gets diluted by trailing garbage), this scans for a stat name that
+    appears as a substring. It is what recovers a stat from OCR bleed like:
+
+        "a% status Duration Nukor Acriata"  -> Status Duration
+        "% Ammo Maximum x"                  -> Ammo Maximum
+        "ypuncture"                         -> Puncture
+
+    Scoring uses ``partial_ratio`` (best-substring match). Ties are broken
+    toward the LONGER canonical name so "Damage to Grineer" wins over the
+    bare "Damage" when both are present, but a ``token_set_ratio`` gate
+    prevents a short name like "Slide Critical Chance" from stealing a plain
+    "Critical Chance" (its extra tokens tank the set ratio).
+    """
+    text = _strip_decorative_noise(text.strip())
+    if not text or not any(c.isalpha() for c in text):
+        return None
+
+    # Fast path: an exact alias/name is present verbatim. Strip leading
+    # non-letters first ("% Additional Combo Count Chance" -> the alias) so a
+    # unit character left on the value span doesn't defeat the exact lookup.
+    core = re.sub(r"^[^A-Za-z]+", "", text)
+    direct = normalize_stat(core)
+    if direct is not None:
+        return direct
+
+    low = text.lower()
+    best: StatRef | None = None
+    best_key: tuple[float, float, int] = (-1.0, -1.0, -1)
+    for stat in canonical_stats():
+        name_low = stat.name.lower()
+        partial = fuzz.partial_ratio(name_low, low)
+        if partial < threshold:
+            continue
+        set_ratio = fuzz.token_set_ratio(name_low, low)
+        # Rank primarily on partial match, then how cleanly the whole name is
+        # accounted for (set_ratio), then name length as a final tiebreak.
+        key = (partial, set_ratio, len(stat.name))
+        if key > best_key:
+            best_key = key
+            best = stat
+    return best
+
+
 def normalize_many(values: list[str] | tuple[str, ...]) -> tuple[str, ...]:
     ids: list[str] = []
     seen: set[str] = set()

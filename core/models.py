@@ -18,6 +18,12 @@ class ParseStatus(StrEnum):
     OK = "ok"
     PARTIAL = "partial"
     EMPTY = "empty"
+    # Physically-impossible read: more than 3 positives or more than 1
+    # negative. A real Warframe riven has at most 3 positives + 1 negative,
+    # so an over-count means OCR bled in an adjacent card (the two-card
+    # cycle view) or a weapon name. Such a read must NEVER be eligible for
+    # KEEP — it routes to REVIEW/REVERT like any other untrusted parse.
+    INVALID = "invalid"
 
 
 @dataclass(frozen=True)

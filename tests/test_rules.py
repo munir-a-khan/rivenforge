@@ -1,6 +1,23 @@
 from core.models import OrGroup, RollProfile, StatSlot
 from core.parser import parse_result
-from core.rules import evaluate, evaluate_result
+from core.rules import evaluate, evaluate_result, score_roll
+
+
+def test_stat_hierarchy_prefers_higher_ranked_combination():
+    profiles = [{
+        "name": "p",
+        "desired_positives": ["Critical Damage", "Critical Chance", "Multishot", "Damage"],
+        "min_positives_required": 2,
+        "acceptable_negatives": ["Impact"],
+    }]
+    top = {"positives": [{"stat": "Critical Damage", "value": 120}, {"stat": "Critical Chance", "value": 90}], "negatives": [], "status": "ok"}
+    low = {"positives": [{"stat": "Damage", "value": 120}, {"stat": "Multishot", "value": 90}], "negatives": [], "status": "ok"}
+    priority = ["Critical Damage", "Critical Chance", "Multishot", "Damage"]
+
+    # Same hit count => same score without a hierarchy...
+    assert score_roll(top, profiles) == score_roll(low, profiles)
+    # ...but the higher-ranked combination wins once a hierarchy is supplied.
+    assert score_roll(top, profiles, stat_priority=priority) > score_roll(low, profiles, stat_priority=priority)
 
 
 def _profile_2_pos_1_neg() -> RollProfile:

@@ -27,7 +27,7 @@ from typing import Literal, NotRequired, TypedDict
 
 # ── 1. Parser output ─────────────────────────────────────────────────────
 
-ParseStatusStr = Literal["ok", "partial", "empty"]
+ParseStatusStr = Literal["ok", "partial", "empty", "invalid"]
 
 
 class RivenStatDict(TypedDict):
@@ -165,7 +165,7 @@ class ButtonPositionsDict(TypedDict, total=False):
 
 # ── 7. Capture metadata (carried on PIL Image.info) ──────────────────────
 
-CapturePathStr = Literal["mss", "dxgi", "mss(dark)"]
+CapturePathStr = Literal["mss", "dxgi", "mss(dark)", "wgc"]
 
 
 class CaptureInfoDict(TypedDict):
@@ -198,6 +198,13 @@ class UserConfigDict(TypedDict):
     rag_threshold: float
     animation_wait: float
     button_coords: ButtonCoordsDict
+    roll_until_match: NotRequired[bool]
+    # How many OCR reads must agree before a keep/revert is trusted (triple-check).
+    confirm_reads: NotRequired[int]
+    # {weapon_name: [stat, ...]} ordered highest-priority first (positives).
+    stat_hierarchies: NotRequired[dict[str, list[str]]]
+    # {weapon_name: [stat, ...]} ordered most-tolerable-first (negatives).
+    neg_hierarchies: NotRequired[dict[str, list[str]]]
 
 
 # ── 10. Roller event payloads (RollerThread → GUI callbacks) ─────────────

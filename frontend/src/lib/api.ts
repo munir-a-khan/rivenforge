@@ -48,6 +48,14 @@ export interface UserConfig {
   rag_threshold: number;
   animation_wait: number;
   button_coords?: Record<string, number[]>;
+  /** When true, only a full profile match is kept; every other roll reverts. */
+  roll_until_match?: boolean;
+  /** OCR reads of the rolled card that must agree before keep/revert (1 = off). */
+  confirm_reads?: number;
+  /** Per-weapon ordered preferred-stat list: { weaponName: [stat, ...] }. */
+  stat_hierarchies?: Record<string, string[]>;
+  /** Per-weapon ordered preferred-NEGATIVE list (most tolerable first). */
+  neg_hierarchies?: Record<string, string[]>;
 }
 
 export interface WeaponEntry {
@@ -246,7 +254,12 @@ export const api = {
         profiles: cfg.profiles,
         roll_limit: cfg.roll_limit,
         rag_threshold: cfg.rag_threshold,
-        animation_wait: cfg.animation_wait
+        animation_wait: cfg.animation_wait,
+        roll_until_match: cfg.roll_until_match ?? false,
+        confirm_reads: cfg.confirm_reads ?? 3,
+        // Send only THIS weapon's preferred orders (positives + negatives).
+        stat_priority: cfg.stat_hierarchies?.[cfg.weapon] ?? [],
+        neg_priority: cfg.neg_hierarchies?.[cfg.weapon] ?? []
       })
     }),
   stopRoll: () => request<{ stopped: boolean }>("/roll/stop", { method: "POST" }),

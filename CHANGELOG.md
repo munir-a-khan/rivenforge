@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+- **Triple-check consensus read**: the rolled card is read N times (default 3) and must agree on the stat set before a keep/revert; disagreements are re-read for free (no kuva) or reverted as untrusted. New `Confirm reads` control.
+- **Physical-limit guard**: reads with more than 3 positives or 1 negative are marked `INVALID` and can never be kept — fixes the adjacent-card-bleed mis-keep.
+- **Focus-safe automation**: the roller pauses instead of stealing focus when you alt-tab away, and always releases modifier keys (fixes the alt-tab lockout / taskbar wedge).
+- **Per-weapon stat hierarchies** for positives AND negatives, drag-to-reorder, auto-seeded from your profiles; they tiebreak which acceptable roll wins.
+- **Roll-until-match** mode: revert everything until a profile fully matches, then stop.
+- **Minimized capture**: restore-without-focus so a minimized Warframe window can still be read via WGC.
+- **Text-input focus fix**: profile fields no longer drop focus on every keystroke.
+- Custom **RIV Roller** app icon across the installer, window, and taskbar.
+- README screenshots gallery + roll-decision safeguards documentation.
+
 ## 0.1.6
 
 - Added a Windows.Graphics.Capture (WGC) backend that reads the Warframe window even while it is covered, unfocused, or on a second monitor. Selectable via `POST /capture/analyze?backend=wgc` and a "Background capture" toggle on Manual Analyze.
