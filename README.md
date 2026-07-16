@@ -1,6 +1,8 @@
 # rivenforge
 
-rivenforge is a Windows-first Warframe riven analysis desktop app. It combines a polished React/Tauri interface, a local FastAPI sidecar, OCR preprocessing, deterministic parsing, profile-based rule matching, and an advisory RAG/market scoring layer.
+rivenforge is a Windows-first Warframe riven analysis and rolling desktop app. It combines a polished React/Tauri interface, a local FastAPI sidecar, window capture, a name-decode + OCR reader, deterministic parsing, profile-based rule matching, and an advisory retrieval + live-market scoring layer.
+
+> **On the scoring layer's name:** earlier builds called this "RAG." That was a misnomer and has been corrected. It is *retrieval + weighted scoring* — a TF-IDF index retrieves the most similar known rolls and a scorer combines that with a tier-list lookup and a live Warframe.Market price signal. There is **no generative model**, so it is not Retrieval-Augmented *Generation*. See [Roll Scoring](#roll-scoring-retrieval--market-signal).
 
 The goal is reliability first: the app should be useful without touching the game, testable without OCR, and safe enough that bad OCR returns `REVIEW` instead of making a wrong roll decision.
 
@@ -23,9 +25,9 @@ The goal is reliability first: the app should be useful without touching the gam
 - Parses riven stat lines into structured positive and negative stats.
 - Evaluates rolls against user-defined profiles instead of hardcoded "good roll" guesses.
 - Explains why a roll matched, failed, or needs review.
-- Uses a local RAG index as extra context for weapon tier/stat suggestions.
+- Uses a local retrieval + market-price scorer as advisory context for weapon tier/stat suggestions.
 - Bundles the Python API as `rivenforge-api.exe` inside the Tauri desktop app.
-- Ships a headless Linux container for the cross-platform half of the API (rules, RAG, manual-OCR analysis).
+- Ships a headless Linux container for the cross-platform half of the API (rules, scoring, manual-OCR analysis).
 - Keeps automation optional and separate from OCR, rules, and profile testing.
 
 ## Roll-Decision Safeguards
@@ -57,7 +59,7 @@ Current React screens:
 - Roll Log: session status and roll history.
 - Profiles: weapon selection, profile generation, stat preferences, and config save flow.
 - Manual Analyze: screenshot upload, clipboard paste, crop mode selection, manual OCR override, parse output, decision, and confidence.
-- Settings: API connection, RAG index status/rebuild, safety note, and diagnostic export.
+- Settings: API connection, scoring-index status/rebuild, safety note, and diagnostic export.
 
 The packaged app starts the sidecar automatically on:
 
@@ -75,7 +77,7 @@ That direction became the React/Tauri app:
 - High-contrast status cards for rolls, profiles, accepted/rejected counts, API state, and confidence.
 - A manual analysis workflow designed around drag/drop, file selection, and clipboard paste.
 - Profile controls that expose stat selection directly instead of hiding the rule system.
-- A debug-friendly Settings screen with RAG rebuild and diagnostics export.
+- A debug-friendly Settings screen with scoring-index rebuild and diagnostics export.
 
 The UI is intentionally presentable because this project is also meant to demonstrate product engineering: frontend polish, local app packaging, sidecar integration, safety boundaries, and testing discipline all in one repo.
 
@@ -93,7 +95,7 @@ FastAPI sidecar
     +--> OCR pipeline
     +--> parser
     +--> profile/rule engine
-    +--> RAG and market scoring
+    +--> retrieval + market scoring
     +--> diagnostics/config/logging
 ```
 
@@ -102,7 +104,7 @@ Main folders:
 - `frontend/`: React, TypeScript, Tauri shell, sidecar startup, app UI.
 - `api/`: FastAPI endpoints used by the desktop shell.
 - `core/`: parser, domain model, OCR pipeline, stat registry, rule engine, automation boundaries.
-- `rag/`: local tier-list index, TF-IDF retrieval, Warframe.Market price signal helpers.
+- `rag/`: the scoring layer — local tier-list index, TF-IDF retrieval, and Warframe.Market price-signal helpers. (Folder name is legacy from the earlier "RAG" label; it performs retrieval + scoring, not generation.)
 - `data/`: generated JSON index, stat aliases, template assets.
 - `tests/`: parser, rules, OCR pipeline, API, and config migration tests.
 - `docs/`: architecture, profile schema, security, troubleshooting, and test plan notes.
@@ -110,17 +112,48 @@ Main folders:
 
 The UI does not decide keep/roll directly. OCR does not decide keep/roll directly. The rule engine receives structured riven data and returns a decision with traces.
 
+## How It Reads A Riven (Input Pipeline)
+
+Reading the roll correctly is the hardest part of the whole app — the numbers are
+small, the two-card compare view bleeds the old card into the new, and the layout
+shifts between rolls. rivenforge uses a layered reader rather than trusting raw OCR:
+
+1. **Capture the game window** via Windows.Graphics.Capture (WGC) — reads the actual
+   Warframe window even when it's covered or unfocused, at a real 1920×1080 frame.
+2. **Locate the card by anchoring on the CONFIRM button.** The selected (new) riven
+   card always sits directly above CONFIRM, so the reader OCRs a thin strip to find
+   CONFIRM's x-position, then crops the card column centered on it. This is what
+   keeps the read on the right card no matter where the compare view drifts.
+3. **Decode the positives from the riven's NAME.** A riven's generated name (e.g.
+   `Seer Toxitron`) is a deterministic grammar over its positive stats — prefix,
+   infix, and suffix syllables each map to a stat. Decoding the name (large, high-
+   contrast text that OCRs cleanly) yields the positive set directly, instead of
+   trying to read three tiny stat lines. See [`core/riven_names.py`](core/riven_names.py).
+4. **OCR only what the name can't tell you: the negative** (and the displayed values).
+   Faction-damage stats shown as multipliers (`x1.81` = +81%, `x0.58` = −42%) are
+   parsed into signed percentages; wrapped stat names (`Ammo` / `Maximum`) are rejoined.
+5. **Reconcile name + OCR** into one structured roll, and **triple-check it**: the card
+   is read several times and the reads must agree on the stat set before the roll is
+   trusted (re-reads cost no kuva). Empty or physically-impossible reads (more than 3
+   positives / 1 negative — i.e. adjacent-card bleed) are discarded.
+
+The result is a structured roll — positives, negative, values — that the rule engine
+and scorer act on.
+
 ## Decision Flow
 
-1. A screenshot or pasted image enters the OCR pipeline.
-2. The crop mode selects what part of the screenshot to inspect.
-3. OCR text is cleaned and parsed into structured riven stats.
-4. Low-confidence, empty, or partial parse results return `REVIEW`.
-5. Valid structured stats are checked against saved profiles.
-6. The rule engine returns `KEEP`, `ROLL`, or `REVIEW` with an explanation.
-7. RAG/market information is shown as advisory context, not as final authority.
+1. A game frame (or a loaded/pasted screenshot) enters the reader above.
+2. Name-decode + OCR produce a structured, consensus-confirmed roll.
+3. Low-confidence, empty, partial, or over-count reads return `REVIEW` and are never kept.
+4. Valid structured stats are checked against your saved profiles.
+5. The rule engine returns `KEEP`, `ROLL`, or `REVIEW` with an explanation trace.
+6. The retrieval + market scorer is advisory only — it ranks acceptable rolls and
+   surfaces plat value, but never overrides a profile decision.
+7. On `KEEP` the roller confirms the new card; on `ROLL` it selects the old card and
+   confirms that (a verified 3-step revert), never accidentally keeping the new roll.
 
-This means a random Warframe.Market listing cannot force the app to keep something you did not ask for. Profiles and parse confidence are the guardrails.
+This means a random Warframe.Market listing cannot force the app to keep something you
+did not ask for. Profiles and read confidence are the guardrails.
 
 ## Crop Modes
 
@@ -153,23 +186,40 @@ Examples of rule behavior:
 - If OCR is partial or low confidence, the result is `REVIEW`, never `ROLL`.
 - If no profile is configured, the result is `REVIEW`.
 
-## Built-In RAG
+## Roll Scoring (Retrieval + Market Signal)
 
-The built-in RAG layer is local and lightweight. It is not a cloud AI service and it does not upload screenshots.
+The scorer is local, lightweight, and **not RAG** — there is no generative model. It is
+information retrieval plus a weighted heuristic. It does not upload screenshots or call a
+cloud AI service.
 
-The index is built from a tier-list spreadsheet into:
+A tier-list spreadsheet is ingested into two local files:
 
-- `data/riven_index.json`: structured weapon entries with desired positives, acceptable negatives, notes, and weapon type.
-- `data/tfidf_model.json`: a pure-Python TF-IDF model for similarity search.
+- `data/riven_index.json`: structured weapon entries — desired positives, acceptable
+  negatives, notes, weapon type — one "document" per weapon (~417 entries).
+- `data/tfidf_model.json`: a pure-Python **TF-IDF** model (bag-of-words term weights)
+  used for lexical similarity retrieval.
 
-At runtime, RAG combines several advisory signals:
+At runtime, `rag/rag.py::score()` produces a `0.0–1.0` advisory score as a weighted sum:
 
-- Tier-list alignment: whether the roll's stats line up with the local weapon entry.
-- TF-IDF similarity: whether the current roll resembles indexed tier-list text.
-- Warframe.Market price signal: optional live auction context for similar stat combinations.
-- Melee fallback logic: local priority rules for cases where market data is sparse.
+```
+score = 0.55 · tier_list_alignment   # set overlap: rolled stats vs the weapon's desired stats, minus a penalty per bad negative
+      + 0.30 · market_price_signal    # live Warframe.Market plat price for those stats (rag/wfm.py)
+      + 0.15 · tfidf_similarity       # cosine similarity of the roll query to the retrieved tier-list documents
+      + melee_bonus                   # ±0.30 hand-tuned CD/Range priority when market data is sparse
+```
 
-Important: RAG is context, not control. The deterministic profile/rule engine owns the keep/roll decision. Market data can help explain value, but it should not override your chosen profile.
+What each piece actually is, stated plainly:
+
+- **Retrieval** — TF-IDF cosine similarity over the document index returns the top-k most
+  similar known rolls. This is classic *lexical* retrieval, not neural/semantic embeddings.
+- **Alignment** — deterministic set math against the tier-list entry for the weapon.
+- **Market** — a live API call to Warframe.Market for real plat prices.
+- **Generation** — none. Nothing generates text from the retrieved context; the retrieval
+  contributes 15% to a number. That is why this is retrieval-based *ranking*, not RAG.
+
+Important: the score is **advisory, not control**. The deterministic profile/rule engine
+owns every keep/roll decision. Market value can rank or explain a roll, but it can never
+override your chosen profile.
 
 ## Background Capture And The Input Boundary
 
@@ -261,7 +311,7 @@ Two Windows `.bat` files at the repo root:
 ## Headless API Container
 
 `Dockerfile` and `docker-compose.yml` build a Linux image that serves the
-**cross-platform** half of the API (rules, RAG, config, weapons, stats, and
+**cross-platform** half of the API (rules, scoring, config, weapons, stats, and
 manual-OCR analysis) using `requirements-api.txt`:
 
 ```bash
