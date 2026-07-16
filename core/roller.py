@@ -176,6 +176,25 @@ class RollerThread(threading.Thread):
                     )
                     return
 
+                # ── 4b. Name-decode override ─────────────────────────────────
+                # The riven's NAME deterministically encodes its POSITIVE stats
+                # and OCRs far more reliably than the small stat rows, so we take
+                # the name's positives as authoritative and trust the stat-line
+                # OCR only for the negative (+ values). Falls back to raw OCR if
+                # the name can't be decoded.
+                riven_name = ""
+                try:
+                    from core import vision as _vision
+                    from core.riven_names import reconcile_parsed_with_name
+                    riven_name = _vision.last_riven_name()
+                    if riven_name:
+                        melee = self.weapon_type in ("melee", "stat sticks")
+                        parsed, decoded = reconcile_parsed_with_name(
+                            parsed, riven_name, self.weapon, melee=melee
+                        )
+                except Exception:
+                    pass
+
                 # ── 5. Evaluate ───────────────────────────────────────────────
                 rule_result = rules.evaluate(parsed, self.profiles)
 
@@ -185,17 +204,25 @@ class RollerThread(threading.Thread):
 
                 rag_score = rag_result.get("score", 0.0)
 
-                # Full accept: profile matched + RAG threshold met + the read
-                # was CONFIRMED by the triple-check. An unstable read (the 3
-                # reads disagreed) is never trustworthy enough to keep on.
+                # If OCR got nothing at all — treat as bad roll, always revert.
+                ocr_failed = not parsed["positives"] and not parsed["negatives"]
+
+                # Full accept: a consensus-confirmed profile match. RAG is an
+                # ADVISORY score for ranking near-ties — it must never veto a
+                # roll the user's own rules accepted. In roll-until-match mode a
+                # match is the explicit goal, so we stop on it regardless of RAG;
+                # in ratchet mode we still let a low RAG hold out for something
+                # better, but only when a better roll is actually achievable.
                 full_accept = (
                     consensus_ok
+                    and not ocr_failed
                     and rule_result["accept"]
-                    and (self.rag_threshold == 0.0 or rag_score >= self.rag_threshold)
+                    and (
+                        self.roll_until_match
+                        or self.rag_threshold == 0.0
+                        or rag_score >= self.rag_threshold
+                    )
                 )
-
-                # If OCR got nothing at all — treat as bad roll, always revert
-                ocr_failed = not parsed["positives"] and not parsed["negatives"]
 
                 # Score for "is this roll better than what we have?"
                 # score_roll() returns -9999 for unreadable rolls, so they
@@ -258,7 +285,11 @@ class RollerThread(threading.Thread):
                 else:
                     _decision_str = "REVERT"
                 try:
-                    from core.vision import _blacklisted_lines
+                    from core.vision import _blacklisted_lines, _last_cluster_debug
+                    # Surface which OCR column was picked as the new card, so a
+                    # diagnostic export shows whether new-vs-equipped separation
+                    # worked. (Free, logging-only.)
+                    rag_result.setdefault("notes", []).append(f"OCR {_last_cluster_debug}")
                     capture_info = dict(frame.info or {})
                     capture_info["frame_size"] = frame.size
                     rlog.log_roll(
@@ -313,9 +344,10 @@ class RollerThread(threading.Thread):
                     if automation.wait_for_screen_settle(sf): break
 
                 else:
-                    # Worse, equal, or OCR failed — full revert sequence:
-                    # CONFIRM → NO → YES (confirm old riven)
-                    if automation.revert_roll(sf): break
+                    # Worse, equal, or OCR failed — revert. Pass the new roll's
+                    # stats so revert_roll can VERIFY it selected the OLD card
+                    # (different stats) before confirming, never keeping the new.
+                    if automation.revert_roll(sf, new_parsed=parsed): break
 
             if sf.is_set():
                 self._finish(

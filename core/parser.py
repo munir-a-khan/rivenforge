@@ -121,6 +121,40 @@ def _normalise_stat(raw: str) -> str | None:
 _VALUE_ANCHOR_RE = re.compile(r"([+\-\u2212\u2013\u2014])?\s*(\d+(?:\.\d+)?)")
 
 
+# Faction damage multiplier, e.g. "x1.81 Damage to Corpus", "xO.58 Damage to
+# Grineer" (OCR often reads the leading 0 as O, and may split "1.81" as "1 .81").
+_FACTION_MULT_RE = re.compile(
+    r"x\s*([0oO]?[\d.,\s]*\d)\s*(damage\s*to\s*(?:corpus|grineer|infested))",
+    re.IGNORECASE,
+)
+
+
+def _extract_faction_multipliers(line: str) -> tuple[list[tuple[str, float, str]], str]:
+    """
+    Pull faction-damage multipliers out of a line and turn them into signed
+    percentages. Returns ``(stats, cleaned_line)`` where each stat is
+    ``(sign_str, magnitude, name)`` — magnitude is |percent| and sign_str is
+    "+"/"-" so the caller applies the same polarity logic as any other stat.
+    x > 1 → positive bonus; x < 1 → negative (curse).
+    """
+    stats: list[tuple[str, float, str]] = []
+
+    def _repl(m: re.Match) -> str:
+        raw = m.group(1).lower().replace("o", "0").replace(" ", "").replace(",", ".")
+        try:
+            mult = float(raw)
+        except ValueError:
+            return " "
+        if mult <= 0 or mult > 10:  # sanity: real faction mults are ~0.4–2.0
+            return " "
+        pct = round((mult - 1.0) * 100.0, 1)
+        stats.append(("+" if pct >= 0 else "-", abs(pct), m.group(2)))
+        return " "
+
+    cleaned = _FACTION_MULT_RE.sub(_repl, line)
+    return stats, cleaned
+
+
 def _extract_line_stats(line: str) -> list[tuple[str, float, str]]:
     """
     Pull EVERY (sign, value, name_text) stat from one OCR line.
@@ -185,7 +219,14 @@ def parse_result(ocr_lines: list[str], confidence: float = 1.0) -> ParseResult:
         if any(skip in lower for skip in _SKIP_PHRASES):
             continue
 
-        candidates = _extract_line_stats(line)
+        # Faction damage is shown as a MULTIPLIER, not a signed percent:
+        # "x1.81 Damage to Corpus" = +81%, "x0.58 Damage to Corpus" = -42%.
+        # Pull those out first (the normal extractor skips x-prefixed numbers as
+        # combo multipliers) and rewrite them as signed-percent stat text.
+        faction_stats, line = _extract_faction_multipliers(line)
+
+        candidates = _extract_line_stats(line) if line.strip() else []
+        candidates = faction_stats + candidates
         if not candidates:
             issues.append(ParserIssue("not_stat_line", "Line did not match stat format", line))
             continue

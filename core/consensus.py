@@ -18,16 +18,29 @@ without a screen or a game running.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from core.contracts import ParsedRollDict
 from core.stat_registry import normalize_stat
 
-# Default number of reads that must agree, and how many times we retry the
-# whole group before giving up and treating the read as untrusted.
+# How many matching reads a stat set needs before we trust it, and the ceiling
+# on total reads before we give up. A read is FREE (no kuva), so we can afford
+# to keep reading until a stable set emerges.
 DEFAULT_CONFIRM_READS = 3
-DEFAULT_MAX_ATTEMPTS = 6
+DEFAULT_MAX_READS = 15
+
+# Physical limits of a real Warframe riven. A read outside these is a bled /
+# garbage frame and must never count toward consensus.
+MAX_POSITIVES = 3
+MAX_NEGATIVES = 1
+
+
+def _is_physically_possible(parsed: ParsedRollDict | dict) -> bool:
+    npos = len(parsed.get("positives", []))
+    nneg = len(parsed.get("negatives", []))
+    return 0 < npos <= MAX_POSITIVES and nneg <= MAX_NEGATIVES
 
 
 def parsed_signature(parsed: ParsedRollDict | dict) -> frozenset[tuple[str, str]]:
@@ -62,38 +75,56 @@ def read_until_consensus(
     read_fn: Callable[[], ParsedRollDict | dict],
     *,
     need: int = DEFAULT_CONFIRM_READS,
-    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    max_reads: int = DEFAULT_MAX_READS,
     should_stop: Callable[[], bool] | None = None,
 ) -> ConsensusResult:
     """
-    Call ``read_fn`` in groups of ``need`` reads. If every read in a group
-    shares the same (non-empty) signature, return it as agreed. Otherwise
-    retry, up to ``max_attempts`` groups.
+    Read the current card repeatedly and return the FIRST stat set that is
+    confirmed by ``need`` reads.
 
-    Returns the last read with ``agreed=False`` if consensus is never reached
-    (the caller should then NOT keep the roll). Honours ``should_stop`` so a
-    stop request breaks out promptly.
+    Tolerant by design: reads are tallied by signature across ALL attempts, so
+    a couple of noisy or bled frames in between don't reset progress — as soon
+    as any one plausible stat set has been seen ``need`` times AND holds a
+    strict majority of the plausible reads so far, it's accepted. Empty reads
+    (mid-animation) and physically-impossible reads (>3 positives / >1 negative
+    — i.e. adjacent-card bleed) are ignored entirely so they can neither win
+    nor block consensus.
+
+    Returns ``agreed=False`` with the best (modal) read if no set reaches
+    ``need`` within ``max_reads`` — the caller must then NOT keep the roll.
+    Honours ``should_stop`` so a stop request breaks out promptly.
     """
     if need < 1:
         need = 1
+    max_reads = max(max_reads, need)
+
+    counts: Counter[frozenset[tuple[str, str]]] = Counter()
+    by_sig: dict[frozenset[tuple[str, str]], ParsedRollDict | dict] = {}
     last: ParsedRollDict | dict = {"positives": [], "negatives": []}
-    last_sig: frozenset[tuple[str, str]] = frozenset()
     reads_taken = 0
 
-    for attempt in range(1, max_attempts + 1):
-        sigs: list[frozenset[tuple[str, str]]] = []
-        for _ in range(need):
-            if should_stop is not None and should_stop():
-                return ConsensusResult(last, False, attempt, reads_taken, last_sig)
-            last = read_fn()
-            reads_taken += 1
-            last_sig = parsed_signature(last)
-            sigs.append(last_sig)
+    while reads_taken < max_reads:
+        if should_stop is not None and should_stop():
+            break
+        last = read_fn()
+        reads_taken += 1
 
-        first = sigs[0]
-        # A consensus on an EMPTY read is not trustworthy — an empty card
-        # usually means the frame was mid-animation. Require a real stat set.
-        if first and all(s == first for s in sigs):
-            return ConsensusResult(last, True, attempt, reads_taken, first)
+        if not _is_physically_possible(last):
+            continue  # empty / bled frame — ignore, don't let it win or block
+        sig = parsed_signature(last)
+        if not sig:
+            continue
+        counts[sig] += 1
+        by_sig[sig] = last
 
-    return ConsensusResult(last, False, max_attempts, reads_taken, last_sig)
+        top_sig, top_n = counts.most_common(1)[0]
+        plausible_reads = sum(counts.values())
+        # Confirmed: seen `need` times AND a strict majority of plausible reads,
+        # so one recurring bled variant can't sneak past a real set.
+        if top_n >= need and top_n * 2 > plausible_reads:
+            return ConsensusResult(by_sig[top_sig], True, reads_taken, reads_taken, top_sig)
+
+    if counts:
+        top_sig, top_n = counts.most_common(1)[0]
+        return ConsensusResult(by_sig[top_sig], False, reads_taken, reads_taken, top_sig)
+    return ConsensusResult(last, False, reads_taken, reads_taken, frozenset())

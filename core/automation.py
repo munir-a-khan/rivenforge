@@ -289,16 +289,32 @@ def press_cycle(stop_flag=None) -> bool:
     what lets you leave the game while a session is 'running' instead of
     being dragged back every roll.
     """
+    paused = False
     while True:
         if stop_flag is not None and stop_flag.is_set():
             return True
         if activate_warframe():
+            if paused:
+                _log_note("Resumed — Warframe is focused again.")
             break
         # User is in another app on purpose — wait and re-check. We do not
-        # click and do not steal focus while paused.
+        # click and do not steal focus while paused. Log once so an apparent
+        # "hang" is visibly a deliberate pause in diagnostics.
+        if not paused:
+            paused = True
+            _log_note("PAUSED — Warframe is not the focused window; click back "
+                      "into the game (or press stop) to resume rolling.")
         if _interruptible_sleep(0.6, stop_flag):
             return True
     return _visual_click("CYCLE FOR", stop_flag)
+
+
+def _log_note(message: str) -> None:
+    try:
+        from core import roll_logger
+        roll_logger.log_note(message)
+    except Exception:
+        pass
 
 
 def _click_yes_on_dialog(stop_flag=None, timeout: float = 10.0) -> bool:
@@ -387,65 +403,47 @@ def wait_for_dialog(seconds: float = 0.6, stop_flag=None) -> bool:
     return _interruptible_sleep(seconds, stop_flag)
 
 
-def revert_roll(stop_flag=None) -> bool:
+def revert_roll(stop_flag=None, new_parsed=None) -> bool:
     """
-    Full revert sequence — confirmed from live Warframe observation:
+    Reject the new roll by selecting the OLD (left) card, then confirming it.
 
-    State when called: two-card view is on screen.
-    Left card = old riven (dimmed), Right/center card = new roll (selected).
-    CONFIRM button at bottom.
+    Verified from live compare captures (1920x1080): the new roll is the
+    bright/selected card at ~50% x; the equipped riven is the DIMMED card on
+    the LEFT at ~36% x / ~57% y. Clicking that left card promotes it to the
+    centre (selected) and moves CONFIRM beneath it — screenshot-confirmed.
 
-    Step A: Click CONFIRM
-            → "Cycle Riven into current selection?" YES/NO appears
-    Step B: Click NO  (reject new roll)
-            → Returns to two-card view. Left card (old) now clickable.
-    Step C: Click the LEFT card  (the old riven, left side of screen)
-            → Left card becomes selected/highlighted
-            → CONFIRM button appears at bottom again
-    Step D: Click CONFIRM  (confirm left card selection)
-            → "Cycle Riven into current selection?" YES/NO appears
-    Step E: Click YES  (confirm keeping old riven)
-            → Returns to single-card cycling screen, CYCLE FOR visible
+      Step 1: Click the LEFT card (old riven, fixed 36% x / 57% y)
+      Step 2: Click CONFIRM  (OCR-located — now under the old card)
+      Step 3: Click YES      → old riven kept, back to CYCLE FOR
+
+    No CONFIRM→NO. The click position is a fixed, verified coordinate (not the
+    OCR-detected one, which can point at the new card), so this reliably keeps
+    the old riven. ``new_parsed`` is accepted for compatibility but unused.
 
     Returns True if stop_flag was set (caller should break).
     """
     # Minimize app so it can't cover Warframe's UI
-    for h in _find_app_hwnds():
+    for hwnd in _find_app_hwnds():
         try:
-            win32gui.ShowWindow(h, win32con.SW_MINIMIZE)
+            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
         except Exception:
             pass
     time.sleep(0.2)
 
-    # ── Step A: click CONFIRM ────────────────────────────────────────────────
+    from core.capture import grab_frame
+    frame = grab_frame()
+    w, h = frame.size
+
+    # ── Step 1: click the LEFT (old) card to select it ───────────────────────
+    _click(int(w * 0.358), int(h * 0.57))
+    time.sleep(0.6)  # let the selection move to the old card
+
+    # ── Step 2: click CONFIRM (OCR-located, now under the old card) ──────────
     if _visual_click("CONFIRM", stop_flag, timeout=10.0):
         return True
     time.sleep(0.5)
 
-    # ── Step B: click NO (reject new roll) ──────────────────────────────────
-    if _click_no_on_dialog(stop_flag, timeout=10.0):
-        return True
-    time.sleep(0.6)  # wait for dialog to dismiss and screen to settle
-
-    # ── Step C: click the LEFT card (old riven) ─────────────────────────────
-    # Left card is always in the left third of screen, vertically centred.
-    # Confirmed from OCR: left card text at x=656 (34%), y=645-726 on 1920x1080
-    from core.capture import grab_frame
-    frame = grab_frame()
-    w, h  = frame.size
-    left_card_x = int(w * 0.35)
-    left_card_y = int(h * 0.65)
-    _click(left_card_x, left_card_y)
-    time.sleep(0.6)  # wait for left card to become selected
-
-    # ── Step D: click CONFIRM (appears after selecting the left card) ─────────
-    # After selecting the left card Warframe shows CONFIRM again — must click
-    # it before the final YES/NO dialog appears.
-    if _visual_click("CONFIRM", stop_flag, timeout=10.0):
-        return True
-    time.sleep(0.5)  # wait for YES/NO dialog to appear
-
-    # ── Step E: click YES (confirm keeping old riven) ─────────────────────────
+    # ── Step 3: click YES (confirm keeping the old riven) ────────────────────
     if _click_yes_on_dialog(stop_flag, timeout=10.0):
         return True
     time.sleep(0.4)

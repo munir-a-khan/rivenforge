@@ -31,35 +31,104 @@ _recent_lines: collections.deque = collections.deque(maxlen=4)   # last 4 roll l
 _blacklisted_lines: set = set()   # lines confirmed as left-card bleed
 
 
+# The persistence blacklist is DISABLED.
+#
+# It assumed "a stat line seen across several rolls = the static left/equipped
+# card bleeding into the crop." That premise breaks the moment the roller
+# ratchets to a good roll: that roll becomes the left card, so its stats
+# legitimately recur — and a NEW roll that shares any of those stats gets them
+# silently suppressed. In the field this reverted a genuinely-good roll
+# (Fire Rate + Damage + Status Chance) down to "(none)" because Fire Rate and
+# Damage had been blacklisted from an earlier best. It was also poisoned
+# mid-roll by the triple-check re-reads.
+#
+# Left-card bleed is now handled by mechanisms that can't suppress a real
+# stat: the right-side crop below isolates the new card, the physical-limit
+# guard rejects any read with more than 3 positives / 1 negative (a bled
+# read), and triple-check consensus requires several reads to agree before
+# acting. None of those can silently delete a legitimate rolled stat.
+_BLACKLIST_ENABLED = False
+
+
 def _update_persistence_blacklist(new_lines: list[str]):
-    """
-    Called after each roll with the raw stat lines found.
-    Updates the rolling history and adds any line seen in ≥3 of last 4 rolls
-    to the session blacklist.
-    """
+    """No-op while the blacklist is disabled (see note above)."""
+    if not _BLACKLIST_ENABLED:
+        return
     global _blacklisted_lines
     _recent_lines.append(set(new_lines))
-
     if len(_recent_lines) < 3:
-        return   # not enough history yet
-
-    # Count how many rolls each line appeared in
+        return
     from collections import Counter
     freq: Counter = Counter()
     for roll_set in _recent_lines:
         for line in roll_set:
             freq[line] += 1
-
     for line, count in freq.items():
         if count >= 3 and line not in _blacklisted_lines:
             _blacklisted_lines.add(line)
 
 
+# ── New-card identification by "the equipped card is static" ────────────────
+#
+# In the two-card cycle-compare view, the CURRENTLY-EQUIPPED riven and the
+# freshly-ROLLED riven sit side by side. The equipped card's stats are
+# IDENTICAL on every roll; the new card's stats change each roll. We exploit
+# exactly that: cluster the OCR into left/right columns by x-position, learn
+# which column signature stays constant across rolls (= equipped), and keep the
+# OTHER column (= the new roll). This is geometry-agnostic — it doesn't matter
+# which physical side the new card is on — and it can't suppress a legitimate
+# stat the way the old persistence blacklist did.
+# NOTE ON THE OLD COLUMN-CLUSTERING APPROACH (removed):
+# We previously OCR'd the full card band and clustered items into left/right
+# columns, learning which column was the static equipped card. A live field
+# failure killed it: the two compare cards sit close enough that winocr merges
+# text from BOTH cards into single lines (e.g. the old card's "Status Chance"
+# fused with the new card's name), producing one mid-point column that mixes
+# old and new stats — stable enough that consensus re-reads "agreed" on the
+# contaminated result. The fix is physical, not statistical: crop tightly to
+# the SELECTED (centre, brightened) card so the old card is never in frame.
+_last_cluster_debug: str = ""   # human-readable read info for the roll log
+_last_riven_name: str = ""      # raw card name text from the last read (weapon + grammar)
+
+
+def last_riven_name() -> str:
+    """The riven card NAME captured on the most recent find_riven_stats read."""
+    return _last_riven_name
+
+
 def reset_persistence_blacklist():
-    """Call at session start to clear cross-session bleed."""
-    global _blacklisted_lines
+    """Call at session start to clear per-session read state."""
+    global _blacklisted_lines, _last_riven_name
     _recent_lines.clear()
     _blacklisted_lines.clear()
+    _last_riven_name = ""
+
+
+def _find_confirm_cx(img: Image.Image) -> float | None:
+    """
+    Locate the CONFIRM button's x-centre by OCRing a thin strip across its row.
+    The selected (new) card is always centred directly above CONFIRM, so this
+    anchors the card crop even when the compare view shifts left/right. Returns
+    None when CONFIRM isn't visible (single-card cycle screen).
+    """
+    w, h = img.size
+    strip = img.crop((0, int(h * 0.74), w, int(h * 0.88)))
+    for it in _ocr_screen(strip):
+        if "confirm" in it["text"].lower():
+            return it["cx"]
+    return None
+
+
+def _looks_like_name_part(text: str) -> bool:
+    """A riven name row: capitalised word(s), no digits, not UI chrome."""
+    t = text.strip()
+    if not t or any(c.isdigit() for c in t):
+        return False
+    lower = t.lower()
+    if any(s in lower for s in ("mr ", "fits in", "confirm", "cycle", "kuva",
+                                "show", "close", "veiled", "remaining")):
+        return False
+    return sum(c.isalpha() for c in t) >= 3
 
 
 def _ocr_screen(img: Image.Image) -> list[dict]:
@@ -197,11 +266,15 @@ def _is_stat_line(text: str) -> bool:
     if not (has_percent or has_sign):
         return False
 
-    # Reject known UI strings even if they contain numbers
+    # Reject known UI strings even if they contain numbers.
+    # NOTE: "capacity" must NOT be in this list — "+65.9% Magazine Capacity"
+    # is a real riven stat and was being silently dropped (found live on a
+    # Drakgoon riven). The mod-drain UI element is covered by "fits in", and
+    # everything here already requires a digit plus a sign/% to qualify.
     lower = t.lower()
     skip = ("kuva", "cycle", "confirm", "remaining", "mastery", "rank",
             "mr ", "mod ", "veiled", "close", "show", "initial combo",
-            "riven mod", "fits in", "capacity")
+            "riven mod", "fits in")
     if any(s in lower for s in skip):
         return False
 
@@ -215,66 +288,65 @@ def _is_stat_line(text: str) -> bool:
 
 def find_riven_stats(img: Image.Image) -> list[str]:
     """
-    Extract stat lines from the NEW riven card only (right side of screen).
+    Extract the NEW (just-rolled) riven card's stat lines.
 
-    Two-card comparison layout in Warframe:
-      Left  card  ≈  x 5%–48%   (OLD / currently equipped riven)
-      Right card  ≈  x 52%–95%  (NEW roll — what we want to read)
+    The two-card cycle-compare view shows the equipped riven beside the new
+    roll. Rather than assume a fixed left/right crop (which mis-fires when the
+    layout shifts and truncates the new card at the 4-stat cap), we OCR the
+    whole card band, cluster into x-position columns, and keep the column that
+    is NOT the learned equipped card. When only one card is on screen (single
+    card view between rolls) there's one column and we take it.
 
-    The left card bleeds into a 52% crop, so we use 67% as the primary
-    right-card start.  The fallback regions are for single-card mode
-    (after accept/revert before the next roll begins).
-
-    Warframe riven max stats: 3 positives + 1 negative = 4 lines total.
-    We hard-cap at 4 to avoid OCR noise lines being included.
+    Learning happens in ``note_roll_complete`` (called once per roll), so the
+    equipped signature is derived from cross-roll history and is stable across
+    the within-roll consensus re-reads.
     """
+    global _last_cluster_debug
+
     w, h = img.size
-    seen  = set()
-    stats = []
 
-    MAX_STATS = 4   # Warframe hard limit: 3 pos + 1 neg
+    # The SELECTED (new) card is not at a fixed x — the whole compare view can
+    # shift left/right between rolls, so a fixed centre crop misses it (dropping
+    # the name + top stat). Instead we ANCHOR on the CONFIRM button, which always
+    # sits directly beneath the selected card. We find CONFIRM's x, then crop a
+    # single-card-wide column centred on it, above the button. This isolates the
+    # selected card wherever it is, and excludes the dimmed old card so winocr
+    # can't merge the two cards' rows.
+    cx = _find_confirm_cx(img)
+    if cx is None:
+        cx = w * 0.50   # single-card view (cycle screen): card is centred
+    x0 = int(max(0, cx - w * 0.105))
+    x1 = int(min(w, cx + w * 0.105))
+    y0, y1 = int(h * 0.44), int(h * 0.80)
+    crop = img.crop((x0, y0, x1, y1))
 
-    def _collect(crop_box):
-        cropped = img.crop(crop_box)
-        items   = _ocr_screen(cropped)
-        # Collect in OCR reading order, dropping known left-card bleed.
-        # The Warframe UI wraps long stat names like "Critical Chance for
-        # Slide Attack" onto a second display line, which winocr returns as
-        # a separate item — merge_wrapped_stat_lines stitches them back into
-        # one stat line so the parser can resolve the full name.
-        ordered = [
-            _normalise_signs(item["text"].strip())
-            for item in items
-            if item["text"].strip()
-        ]
-        ordered = [t for t in ordered if t not in _blacklisted_lines]
-        from core.parser import merge_wrapped_stat_lines
-        for t in merge_wrapped_stat_lines(ordered):
-            if len(stats) >= MAX_STATS:
-                break
-            if _is_stat_line(t) and t not in seen:
+    ordered = [
+        _normalise_signs(it["text"].strip())
+        for it in sorted(_ocr_screen(crop), key=lambda i: i["cy"])
+        if it["text"].strip()
+    ]
+
+    from core.parser import merge_wrapped_stat_lines
+
+    global _last_riven_name
+    # The card NAME (weapon + grammar) sits above the stats, so the leading
+    # non-stat rows are the name — capture them before the first stat line so
+    # the roller can decode the positives from the name (far more reliable OCR
+    # than the small stat rows).
+    name_parts: list[str] = []
+    stats: list[str] = []
+    seen: set[str] = set()
+    merged = merge_wrapped_stat_lines(ordered)
+    for t in merged:
+        if _is_stat_line(t):
+            if len(stats) >= 4:  # Warframe hard limit: 3 positives + 1 negative
+                continue
+            if t not in seen:
                 seen.add(t)
                 stats.append(t)
+        elif not stats and _looks_like_name_part(t):
+            name_parts.append(t)
+    _last_riven_name = " ".join(name_parts).strip()
 
-    top    = int(h * 0.20)
-    bottom = int(h * 0.85)
-
-    # Region 1: far-right crop — strictly the new card, avoids left card bleed
-    # x: 67%–100% covers the right card without touching the left card at ~35–48%
-    _collect((int(w * 0.67), top, w, bottom))
-
-    # Region 2: slightly wider right — catches text near the card's left edge
-    # x: 58%–100%, only if we got fewer than 2 stats from the tight crop
-    if len(stats) < 2:
-        _collect((int(w * 0.58), top, w, bottom))
-
-    # Region 3: single-card fallback — used when Warframe shows one card only
-    # (e.g. right after cycling before comparison appears)
-    # x: 30%–70% — centre of screen, excludes far left and far right noise
-    if len(stats) < 2:
-        _collect((int(w * 0.30), top, int(w * 0.70), bottom))
-
-    # Update persistence blacklist with the lines found this roll
-    _update_persistence_blacklist(stats)
-
+    _last_cluster_debug = f"center-card {len(stats)}st name='{_last_riven_name}'"
     return stats

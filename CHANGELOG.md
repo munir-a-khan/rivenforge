@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.0.0
+
+First stable release. Accurate riven reading is the headline.
+
+- **Riven-name decoding**: the card's generated name deterministically encodes the
+  positive stats, so we decode the name (big, clean text) for the positives and use
+  OCR only for the negative. Reconciled against OCR each roll — far more accurate than
+  reading four small stat lines.
+- **CONFIRM-anchored capture**: the crop now locates the CONFIRM button and reads the
+  card directly above it, so it never misses the card when the compare view shifts
+  left/right. Replaces the fragile fixed-position crop that dropped stats.
+- **Faction-damage multipliers**: `x1.81 Damage to Corpus` (+81%) and `x0.58` (−42%)
+  are parsed as signed stats, including when OCR merges them onto another line.
+- **Fast, safe revert**: rejecting a roll clicks the old (left) card → CONFIRM → YES
+  (3 steps, not 5), and OCR-verifies the old card is selected before confirming — it
+  can never accidentally keep the new roll.
+- **Drag-to-reorder fixed**: disabled Tauri's OS drag-drop interception so the stat
+  hierarchy rows actually drag.
+- **Tolerant triple-check consensus** that ignores empty/over-count frames, and a
+  physical-limit guard (>3 positives / >1 negative ⇒ INVALID, never kept).
+- RAG is advisory only — it no longer vetoes a roll your own profile accepted.
+
 ## 0.2.0
 
 - **Triple-check consensus read**: the rolled card is read N times (default 3) and must agree on the stat set before a keep/revert; disagreements are re-read for free (no kuva) or reverted as untrusted. New `Confirm reads` control.

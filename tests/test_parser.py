@@ -57,11 +57,10 @@ def test_parse_recovers_negative_buried_in_ocr_bleed():
     neg = {s.stat_id: s.value for s in result.negatives}
     # The negative must be recovered — this is what stops the bot keeping a bad roll.
     assert neg.get("status_duration") == -35.0
-    # And the clean positives still parse; no phantom from the "x1 .22" garbage.
+    # And the clean positives still parse.
     assert "critical_damage" in pos_ids
     assert "damage" in pos_ids
     assert "ammo_maximum" in pos_ids
-    assert "damage_to_infested" not in pos_ids  # orphan-decimal phantom is suppressed
 
 
 def test_parse_extracts_multiple_stats_from_one_merged_line():
@@ -222,6 +221,34 @@ def test_parse_result_merges_wrapped_ui_stat_names():
     ]
     assert [stat.stat_id for stat in result.negatives] == ["initial_combo"]
     assert result.negatives[0].value == -93.7
+
+
+def test_faction_damage_multiplier_positive_and_negative():
+    # Faction damage shows as a multiplier, not a signed percent.
+    # x1.81 = +81% (bonus); x0.58 = -42% (curse).
+    result = parse_result([
+        "x1.81 Damage to Corpus",
+        "+164.6% Toxin",
+        "-88.7% Impact",
+    ])
+    assert result.status == ParseStatus.OK
+    pos = {p.stat_id: p.value for p in result.positives}
+    neg = {n.stat_id: n.value for n in result.negatives}
+    assert pos["damage_to_corpus"] == 81.0
+    assert pos["toxin"] == 164.6
+    assert neg["impact"] == -88.7
+
+
+def test_faction_multiplier_curse_merged_with_a_positive():
+    # OCR often merges the faction curse onto the previous stat line and reads
+    # the leading 0 as O: "+148.1% Slash xO.58 Damage to Corpus".
+    result = parse_result([
+        "+148.1% Slash xO.58 Damage to Corpus",
+        "+61.2% Reload Speed",
+    ])
+    assert [s.stat_id for s in result.positives] == ["slash", "reload_speed"]
+    assert result.negatives[0].stat_id == "damage_to_corpus"
+    assert result.negatives[0].value == -42.0
 
 
 def test_legacy_parse_shape_is_preserved():

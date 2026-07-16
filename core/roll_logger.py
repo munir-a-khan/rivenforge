@@ -198,6 +198,12 @@ def log_session_end(reason: str):
     )
 
 
+def log_note(message: str):
+    """One-off timestamped note (e.g. a pause) so diagnostics aren't silent."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _write(f"[{ts}] NOTE: {message}\n")
+
+
 def close():
     global _fh
     with _lock:
