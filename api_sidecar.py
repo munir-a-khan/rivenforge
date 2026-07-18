@@ -50,7 +50,9 @@ def _port_is_taken(host: str, port: int) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the rivenforge local API sidecar.")
-    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--host", default=None,
+                        help=f"bind address (default {DEFAULT_HOST}; auto 0.0.0.0 when "
+                             "phone access is enabled in config)")
     parser.add_argument(
         "--port",
         type=int,
@@ -59,6 +61,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--log-level", default="warning")
     args = parser.parse_args(argv)
+
+    # Bind host resolution: an explicit --host always wins. Otherwise stay on
+    # 127.0.0.1 (no network exposure) UNLESS the user turned on phone access,
+    # in which case bind 0.0.0.0 so a paired phone on the LAN can reach it. The
+    # pairing-token guard (api.app) still requires a valid token for every
+    # non-loopback request, so exposure without a token is a closed door.
+    if args.host is not None:
+        host = args.host
+    else:
+        host = DEFAULT_HOST
+        try:
+            from data_util import load_config
+            if load_config().get("phone_access_enabled"):
+                host = "0.0.0.0"  # noqa: S104 — intentional, guarded by pairing token
+        except Exception:
+            host = DEFAULT_HOST
+    args.host = host
 
     if args.port == 0:
         port = _free_port(args.host)

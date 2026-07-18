@@ -8,9 +8,19 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from api.diagnostics import build_diagnostic_bundle
@@ -45,6 +55,50 @@ from core.rules import default_profiles_from_weapon_data
 from data_util import load_config, save_config
 from rag import rag as rag_mod
 from rag.ingest import all_weapons, ingest, weapon_lookup
+
+# Hosts treated as "local" (the desktop UI and the test client). Requests from
+# any other host — i.e. a phone on the LAN once the sidecar is exposed — must
+# carry a valid pairing token. "testclient" keeps Starlette's TestClient local.
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+
+# Endpoints reachable without a pairing token even from a remote host, so a
+# phone can confirm the PC is reachable before it has paired.
+_PAIR_EXEMPT_PATHS = {"/health"}
+
+
+def _is_local(host: str | None) -> bool:
+    return host in _LOCAL_HOSTS
+
+
+def _bearer_or_query_token(headers: Any, query_token: str) -> str:
+    auth = ""
+    try:
+        auth = headers.get("authorization", "") or ""
+    except Exception:
+        auth = ""
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return (query_token or "").strip()
+
+
+def _lan_ip() -> str:
+    """
+    Best-effort primary LAN IPv4, so the desktop can tell the phone which
+    address to reach. Uses a UDP socket to a public IP purely to discover which
+    local interface routes outbound — no packet is actually sent.
+    """
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return str(s.getsockname()[0])
+    except Exception:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return "127.0.0.1"
+    finally:
+        s.close()
 
 
 def _exit_process_later(delay_seconds: float = 0.2) -> None:
@@ -175,6 +229,24 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def _pairing_guard(request: Request, call_next):
+        # Loopback (desktop UI, tests) is always allowed. A remote caller — a
+        # phone reaching the sidecar once it is bound to 0.0.0.0 — must present
+        # a valid pairing token. Fails CLOSED: if no token has ever been minted,
+        # every remote request is rejected. HTTP only; the WebSocket route does
+        # its own check (middleware does not see WS handshakes).
+        host = request.client.host if request.client else None
+        if not _is_local(host) and request.url.path not in _PAIR_EXEMPT_PATHS:
+            from core import pairing
+            token = _bearer_or_query_token(request.headers, request.query_params.get("token", ""))
+            if not pairing.verify(token):
+                return JSONResponse(
+                    {"detail": "Pairing required. Scan the code in Settings → Phone Access."},
+                    status_code=401,
+                )
+        return await call_next(request)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -307,6 +379,44 @@ def create_app() -> FastAPI:
         _lic.deactivate()
         return _lic.status().to_dict()
 
+    @app.get("/pair/status")
+    def pair_status(request: Request) -> dict[str, Any]:
+        # The token + LAN address are returned only to the desktop (loopback):
+        # a remote caller that already holds the token doesn't need it echoed,
+        # and one that doesn't can't reach here (the guard rejected it).
+        from core import pairing
+        local = _is_local(request.client.host if request.client else None)
+        token = pairing.get_token()
+        return {
+            "paired": token is not None,
+            "enabled": bool(load_config().get("phone_access_enabled")),
+            "token": token if local else None,
+            "lan_ip": _lan_ip() if local else None,
+        }
+
+    @app.post("/pair/rotate")
+    def pair_rotate(request: Request) -> dict[str, Any]:
+        # Only the desktop owner (loopback) may mint/rotate a token, so a paired
+        # phone can't silently re-key access.
+        if not _is_local(request.client.host if request.client else None):
+            raise HTTPException(status_code=403, detail="Pairing can only be managed from the desktop.")
+        from core import pairing
+        return {"paired": True, "token": pairing.rotate()}
+
+    @app.post("/pair/clear")
+    def pair_clear(request: Request) -> dict[str, bool]:
+        if not _is_local(request.client.host if request.client else None):
+            raise HTTPException(status_code=403, detail="Pairing can only be managed from the desktop.")
+        from core import pairing
+        pairing.clear()
+        return {"paired": False}
+
+    @app.get("/roll/session")
+    def roll_session() -> dict[str, Any]:
+        # What is running right now, for a phone joining mid-session (the WS
+        # only streams NEW events).
+        return session_manager.snapshot()
+
     @app.post("/roll/start", response_model=RollStartResponse)
     def roll_start(payload: RollStartRequest) -> RollStartResponse:
         # Automated rolling is the licensed feature. Manual analysis stays free.
@@ -372,6 +482,16 @@ def create_app() -> FastAPI:
 
     @app.websocket("/events")
     async def events(ws: WebSocket) -> None:
+        # The live roll stream. Loopback (desktop UI) is open; a remote phone
+        # must present a valid pairing token (?token=… or a Bearer header) or
+        # the socket is closed with a policy-violation code before accept.
+        host = ws.client.host if ws.client else None
+        if not _is_local(host):
+            from core import pairing
+            token = _bearer_or_query_token(ws.headers, ws.query_params.get("token", ""))
+            if not pairing.verify(token):
+                await ws.close(code=1008)  # policy violation
+                return
         await ws.accept()
         try:
             async for event in event_bus.subscribe():

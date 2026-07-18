@@ -63,6 +63,10 @@ _DEFAULTS = {
     "rag_threshold": 0.60,
     "animation_wait": 2.5,
     "roll_until_match": False,
+    # When True the sidecar binds 0.0.0.0 (not just 127.0.0.1) so a paired
+    # phone on the LAN can reach it. Always gated by the pairing token; a
+    # sidecar restart is needed for a change to take effect.
+    "phone_access_enabled": False,
     # Per-weapon manual stat preference order: {weapon_name: [stat, ...]}.
     # Highest-priority stat first. Biases scoring toward the user's favoured
     # combination for that specific weapon.

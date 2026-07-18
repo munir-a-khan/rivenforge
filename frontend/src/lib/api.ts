@@ -56,6 +56,8 @@ export interface UserConfig {
   stat_hierarchies?: Record<string, string[]>;
   /** Per-weapon ordered preferred-NEGATIVE list (most tolerable first). */
   neg_hierarchies?: Record<string, string[]>;
+  /** When true the sidecar binds 0.0.0.0 so a paired phone can reach it. */
+  phone_access_enabled?: boolean;
 }
 
 export interface WeaponEntry {
@@ -104,6 +106,13 @@ export interface LicenseStatus {
   tier: string;
   expires: number | null;
   reason: string;
+}
+
+export interface PairStatus {
+  paired: boolean;
+  enabled: boolean;
+  token: string | null;
+  lan_ip: string | null;
 }
 
 export interface RollEvent {
@@ -271,6 +280,9 @@ export const api = {
       })
     }),
   stopRoll: () => request<{ stopped: boolean }>("/roll/stop", { method: "POST" }),
+  pairStatus: () => request<PairStatus>("/pair/status"),
+  pairRotate: () => request<PairStatus>("/pair/rotate", { method: "POST" }),
+  pairClear: () => request<{ paired: boolean }>("/pair/clear", { method: "POST" }),
   licenseStatus: () => request<LicenseStatus>("/license/status"),
   activateLicense: (key: string) =>
     request<LicenseStatus>("/license/activate", {

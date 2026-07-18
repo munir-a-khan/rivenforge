@@ -370,6 +370,35 @@ textarea {
   margin-top: 12px;
 }
 
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.toggle-row input {
+  width: auto;
+  margin: 0;
+  cursor: pointer;
+}
+
+.pair-qr {
+  display: block;
+  margin: 14px 0 8px;
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px;
+  image-rendering: pixelated;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Menlo, monospace;
+  letter-spacing: 0.02em;
+  user-select: all;
+}
+
 .secondary {
   padding: 0 12px;
 }

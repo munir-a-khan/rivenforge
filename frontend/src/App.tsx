@@ -8,6 +8,7 @@ import {
   FileImage,
   KeyRound,
   Play,
+  Smartphone,
   Save,
   Settings,
   ShieldCheck,
@@ -15,6 +16,7 @@ import {
   Square,
   Wand2
 } from "lucide-react";
+import QRCode from "qrcode";
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -24,6 +26,7 @@ import {
   Decision,
   EventSocketStatus,
   LicenseStatus,
+  PairStatus,
   RollEvent,
   RollProfile,
   UserConfig,
@@ -428,6 +431,8 @@ function App() {
             license={license}
             activateLicense={activateLicense}
             deactivateLicense={deactivateLicense}
+            config={config}
+            saveConfig={saveConfig}
           />
         )}
       </main>
@@ -1017,7 +1022,9 @@ function SettingsPage({
   rebuildRagIndex,
   license,
   activateLicense,
-  deactivateLicense
+  deactivateLicense,
+  config,
+  saveConfig
 }: {
   apiBaseInput: string;
   setApiBaseInput: (value: string) => void;
@@ -1030,6 +1037,8 @@ function SettingsPage({
   license: LicenseStatus | null;
   activateLicense: (key: string) => Promise<LicenseStatus>;
   deactivateLicense: () => Promise<void>;
+  config: UserConfig;
+  saveConfig: (cfg?: UserConfig) => Promise<void>;
 }) {
   const [rag, setRag] = useState<{ ready: boolean; entries: number } | null>(null);
   return (
@@ -1037,6 +1046,10 @@ function SettingsPage({
       <div className="panel">
         <PanelTitle icon={<KeyRound />} title="License" />
         <LicenseCard license={license} activateLicense={activateLicense} deactivateLicense={deactivateLicense} />
+      </div>
+      <div className="panel">
+        <PanelTitle icon={<Smartphone />} title="Phone Access" />
+        <PhoneAccessCard config={config} saveConfig={saveConfig} />
       </div>
       <div className="panel">
         <PanelTitle icon={<Settings />} title="API" />
@@ -1134,6 +1147,144 @@ function LicenseCard({
           {busy ? "Checking…" : "Activate"}
         </button>
       </div>
+    </>
+  );
+}
+
+function PhoneAccessCard({
+  config,
+  saveConfig
+}: {
+  config: UserConfig;
+  saveConfig: (cfg?: UserConfig) => Promise<void>;
+}) {
+  const [status, setStatus] = useState<PairStatus | null>(null);
+  const [qr, setQr] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const enabled = config.phone_access_enabled ?? false;
+  const port = (() => {
+    try {
+      return new URL(getApiBase()).port || "47321";
+    } catch {
+      return "47321";
+    }
+  })();
+
+  async function refresh() {
+    try {
+      setStatus(await api.pairStatus());
+    } catch {
+      setStatus(null);
+    }
+  }
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const payload =
+    status?.token && status?.lan_ip
+      ? `rivenforge://pair?host=${status.lan_ip}&port=${port}&token=${status.token}`
+      : "";
+
+  useEffect(() => {
+    if (!payload) {
+      setQr("");
+      return;
+    }
+    QRCode.toDataURL(payload, { margin: 1, width: 220 })
+      .then(setQr)
+      .catch(() => setQr(""));
+  }, [payload]);
+
+  async function toggle(on: boolean) {
+    setBusy(true);
+    try {
+      await saveConfig({ ...config, phone_access_enabled: on });
+      if (on && !status?.token) await api.pairRotate();
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function rotate() {
+    setBusy(true);
+    try {
+      await api.pairRotate();
+      setCopied(false);
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function revoke() {
+    setBusy(true);
+    try {
+      await api.pairClear();
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <label className="toggle-row">
+        <input type="checkbox" checked={enabled} disabled={busy} onChange={(e) => toggle(e.target.checked)} />
+        Let my phone watch rolls live over my network
+      </label>
+
+      {!enabled && (
+        <p className="hint">
+          Off — the app is reachable only from this PC. Turn on to pair the rivenforge phone app and
+          watch your rolls live. <strong>Restart the app after enabling</strong> so it starts listening
+          on your network.
+        </p>
+      )}
+
+      {enabled && !status?.token && (
+        <div className="row">
+          <button className="secondary" onClick={rotate} disabled={busy}>
+            Generate pairing code
+          </button>
+        </div>
+      )}
+
+      {enabled && status?.token && (
+        <>
+          <p className="hint">
+            Scan this in the rivenforge phone app. <strong>Anyone with this code can watch and control
+            your rolling session</strong> — keep it private, and revoke it if your phone is lost.
+          </p>
+          {qr && <img className="pair-qr" src={qr} alt="pairing QR code" width={200} height={200} />}
+          <p className="hint mono">
+            {status.lan_ip}:{port}
+          </p>
+          <div className="row">
+            <button
+              className="secondary"
+              onClick={() => {
+                navigator.clipboard?.writeText(payload);
+                setCopied(true);
+              }}
+              disabled={busy}
+            >
+              {copied ? "Copied" : "Copy code"}
+            </button>
+            <button className="secondary" onClick={rotate} disabled={busy}>
+              New code
+            </button>
+            <button className="secondary" onClick={revoke} disabled={busy}>
+              Revoke
+            </button>
+          </div>
+          <p className="hint">
+            Away from home? Reach your PC over Tailscale (free) and pair using its tailnet IP instead of{" "}
+            {status.lan_ip}.
+          </p>
+        </>
+      )}
     </>
   );
 }

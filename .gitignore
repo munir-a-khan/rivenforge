@@ -64,3 +64,6 @@ tools/license_private_key.pem
 license.key
 config/license.key
 **/license.key
+
+# Monetization/strategy notes — keep private (repo is public)
+docs/publishing-and-monetization.md

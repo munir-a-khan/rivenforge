@@ -17,12 +17,30 @@ class RollSession:
 class RollSessionManager:
     def __init__(self) -> None:
         self._session: RollSession | None = None
+        # Snapshot of the params the active session was started with, so a
+        # phone joining mid-session (via GET /roll/session) can show what is
+        # running. The WebSocket only streams NEW roll events.
+        self._last_payload: dict[str, Any] = {}
+
+    def snapshot(self) -> dict[str, Any]:
+        """A phone-friendly view of the current session (running or not)."""
+        running = bool(self._session and self._session.thread.is_alive())
+        p = self._last_payload if running else {}
+        return {
+            "running": running,
+            "session_id": self._session.session_id if (running and self._session) else None,
+            "weapon": p.get("weapon", ""),
+            "weapon_type": p.get("weapon_type", ""),
+            "roll_limit": p.get("roll_limit", 0),
+            "roll_until_match": p.get("roll_until_match", False),
+        }
 
     def start(self, payload: dict[str, Any]) -> str:
         if self._session and self._session.thread.is_alive():
             raise RuntimeError("A roll session is already running.")
 
         session_id = str(uuid.uuid4())
+        self._last_payload = dict(payload)
 
         thread = RollerThread(
             weapon=payload["weapon"],
