@@ -14,16 +14,12 @@ datas = [
     ("data/tfidf_model.json", "data"),
 ]
 
-# Bundle the config/ dir as the seed snapshot, but NEVER ship license.key.
-# In dev mode an activated license is written into config/ (it sits next to the
-# bundled user_config.json); blanket-bundling the folder would bake the
-# maintainer's own key into the installer and license every user for free.
-for _cfg_name in sorted(os.listdir("config")):
-    if _cfg_name == "license.key":
-        continue
-    _cfg_src = os.path.join("config", _cfg_name)
-    if os.path.isfile(_cfg_src):
-        datas.append((_cfg_src, "config"))
+# NOTE: config/ is deliberately NOT bundled. It holds the maintainer's own
+# runtime files — user_config.json (personal weapon/profiles) and license.key
+# — which are gitignored and must never ship. Bundling them baked "quatz" and a
+# valid license into every installer. A fresh install now starts from the
+# built-in defaults in data_util._DEFAULTS (empty weapon, no profiles) and
+# writes its own config to %LOCALAPPDATA%\rivenforge\ on first run.
 
 datas += collect_data_files("fastapi")
 datas += collect_data_files("starlette")

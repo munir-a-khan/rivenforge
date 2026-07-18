@@ -560,6 +560,11 @@ function Profiles({
   useEffect(() => {
     const w = config.weapon;
     if (!w) return;
+    // Only seed hierarchies for a REAL weapon. The weapon field is free-text
+    // (a datalist), so config.weapon updates on every keystroke — without this
+    // guard, typing "quatz" created junk keys q, qu, qua, quar, quat before the
+    // full name ever landed. Wait until the typed value matches a known weapon.
+    if (!weapons.some((x) => x.weapon.toLowerCase() === w.toLowerCase())) return;
     const posSeed = uniq(config.profiles.flatMap((p) => p.desired_positives ?? []));
     const negSeed = uniq(config.profiles.flatMap((p) => p.acceptable_negatives ?? []));
     const posStored = config.stat_hierarchies?.[w] ?? [];
@@ -575,7 +580,7 @@ function Profiles({
       neg_hierarchies: negChanged ? { ...(config.neg_hierarchies ?? {}), [w]: negMerged } : config.neg_hierarchies
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.weapon, config.profiles]);
+  }, [config.weapon, config.profiles, weapons]);
 
   function updateProfile(index: number, profile: RollProfile) {
     const next = { ...config, profiles: config.profiles.map((p, i) => (i === index ? profile : p)) };
