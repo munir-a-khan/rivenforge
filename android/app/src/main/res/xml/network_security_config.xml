@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The companion talks plain HTTP/WS to the desktop over the LAN (or a Tailscale
+  tailnet). Android blocks cleartext by default on modern API levels, so allow
+  it here. Access is still gated by the pairing token; over the internet, use
+  Tailscale so transit is encrypted at the network layer.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose supplies the real colors via Material 3; this base theme just
+         needs to exist and be a Material-family parent for the Activity. -->
+    <style name="Theme.RivenforgeCompanion" parent="android:Theme.Material.NoActionBar" />
+</resources>
