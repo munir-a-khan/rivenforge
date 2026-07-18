@@ -290,8 +290,34 @@ def create_app() -> FastAPI:
         """
         return await run_in_threadpool(_run_input_probe)
 
+    @app.get("/license/status")
+    def license_status() -> dict[str, Any]:
+        from core import license as _lic
+        return _lic.status().to_dict()
+
+    @app.post("/license/activate")
+    def license_activate(payload: dict[str, Any]) -> dict[str, Any]:
+        from core import license as _lic
+        info = _lic.activate(str(payload.get("key", "")))
+        return info.to_dict()
+
+    @app.post("/license/deactivate")
+    def license_deactivate() -> dict[str, Any]:
+        from core import license as _lic
+        _lic.deactivate()
+        return _lic.status().to_dict()
+
     @app.post("/roll/start", response_model=RollStartResponse)
     def roll_start(payload: RollStartRequest) -> RollStartResponse:
+        # Automated rolling is the licensed feature. Manual analysis stays free.
+        from core import license as _lic
+        info = _lic.status()
+        if not info.licensed:
+            raise HTTPException(
+                status_code=402,
+                detail=(info.reason or "A license key is required.")
+                + " Activate a key in Settings → License.",
+            )
         try:
             session_id = session_manager.start(payload.model_dump())
         except RuntimeError as e:

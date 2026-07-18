@@ -12,8 +12,18 @@ datas = [
     ("data/stat_aliases.json", "data"),
     ("data/stat_aliases_loader.py", "data"),
     ("data/tfidf_model.json", "data"),
-    ("config", "config"),
 ]
+
+# Bundle the config/ dir as the seed snapshot, but NEVER ship license.key.
+# In dev mode an activated license is written into config/ (it sits next to the
+# bundled user_config.json); blanket-bundling the folder would bake the
+# maintainer's own key into the installer and license every user for free.
+for _cfg_name in sorted(os.listdir("config")):
+    if _cfg_name == "license.key":
+        continue
+    _cfg_src = os.path.join("config", _cfg_name)
+    if os.path.isfile(_cfg_src):
+        datas.append((_cfg_src, "config"))
 
 datas += collect_data_files("fastapi")
 datas += collect_data_files("starlette")
@@ -24,6 +34,12 @@ datas += collect_data_files("uvicorn")
 # runtime (guarded), but bundling it is what enables background window capture.
 _wc_datas, _wc_binaries, _wc_hidden = collect_all("windows_capture")
 datas += _wc_datas
+
+# cryptography ships a compiled Rust extension (_rust.pyd) plus bundled OpenSSL.
+# collect_all grabs those binaries so license verification actually works in the
+# frozen build — without them core.license fails CLOSED and locks out every key.
+_cr_datas, _cr_binaries, _cr_hidden = collect_all("cryptography")
+datas += _cr_datas
 
 hiddenimports = [
     "api.app",
@@ -37,6 +53,7 @@ hiddenimports = [
     "core.capture_wgc",
     "core.contracts",
     "core.hotkey",
+    "core.license",
     "core.models",
     "core.ocr",
     "core.ocr_pipeline",
@@ -77,13 +94,20 @@ hiddenimports = [
     "numpy",
     "PIL",
     "windows_capture",
+    # License verification. core.license imports these lazily inside functions
+    # and fails CLOSED if they're missing — so an unbundled backend would lock
+    # every legitimate key out of the frozen build.
+    "cryptography",
+    "cryptography.hazmat.primitives.asymmetric.ed25519",
+    "cryptography.hazmat.bindings._rust",
 ]
 hiddenimports += _wc_hidden
+hiddenimports += _cr_hidden
 
 a = Analysis(
     ["api_sidecar.py"],
     pathex=[os.path.abspath(".")],
-    binaries=list(_wc_binaries),
+    binaries=list(_wc_binaries) + list(_cr_binaries),
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

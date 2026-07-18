@@ -6,6 +6,7 @@ import {
   Circle,
   Download,
   FileImage,
+  KeyRound,
   Play,
   Save,
   Settings,
@@ -22,6 +23,7 @@ import {
   CropMode,
   Decision,
   EventSocketStatus,
+  LicenseStatus,
   RollEvent,
   RollProfile,
   UserConfig,
@@ -120,6 +122,7 @@ function App() {
   const [message, setMessage] = useState("");
   const [statOptions, setStatOptions] = useState<string[]>(STAT_OPTIONS_FALLBACK);
   const [showOnboarding, setShowOnboarding] = useState(() => localStorage.getItem(ONBOARDING_KEY) !== "true");
+  const [license, setLicense] = useState<LicenseStatus | null>(null);
 
   async function refresh() {
     setApiStatus("checking");
@@ -128,9 +131,37 @@ function App() {
       const cfg = await api.config();
       setConfig({ ...emptyConfig, ...cfg, profiles: cfg.profiles || [] });
       setApiStatus("online");
+      try {
+        setLicense(await api.licenseStatus());
+      } catch {
+        // Older sidecar without /license — leave unknown rather than
+        // locking the user out of a build that never had the gate.
+        setLicense(null);
+      }
     } catch (error) {
       setApiStatus("offline");
       setMessage(error instanceof Error ? error.message : "API unavailable");
+    }
+  }
+
+  async function activateLicense(key: string) {
+    try {
+      const info = await api.activateLicense(key);
+      setLicense(info);
+      setMessage(info.licensed ? `License activated for ${info.licensee}.` : info.reason || "Activation failed.");
+      return info;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to activate license.");
+      throw error;
+    }
+  }
+
+  async function deactivateLicense() {
+    try {
+      setLicense(await api.deactivateLicense());
+      setMessage("License removed from this machine.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to remove license.");
     }
   }
 
@@ -225,7 +256,17 @@ function App() {
       (event) => {
         setEvents((prev) => [event, ...prev].slice(0, 80));
         if (event.kind === "roll") setRolls((prev) => [event, ...prev]);
-        if (event.kind === "done" || event.kind === "error") setRunning(false);
+        if (event.kind === "done") {
+          setRunning(false);
+          // Always tell the user WHY rolling stopped — accepted, roll limit,
+          // black frame, or repeated UI hiccups. Silence here read as
+          // "stopped out of nowhere".
+          setMessage(event.reason || "Rolling stopped.");
+        }
+        if (event.kind === "error") {
+          setRunning(false);
+          setMessage(`Rolling stopped: ${(event.message || "").split("\n")[0]}`);
+        }
       },
       (status) => setWsStatus(status),
     );
@@ -384,17 +425,33 @@ function App() {
             exportDiagnostics={exportDiagnostics}
             checkRagStatus={checkRagStatus}
             rebuildRagIndex={rebuildRagIndex}
+            license={license}
+            activateLicense={activateLicense}
+            deactivateLicense={deactivateLicense}
           />
         )}
       </main>
 
       <footer className="footer">
-        <button className="primary-action" onClick={running ? stopRolling : startRolling}>
+        <button
+          className="primary-action"
+          onClick={running ? stopRolling : startRolling}
+          disabled={!running && license !== null && !license.licensed}
+          title={
+            !running && license !== null && !license.licensed
+              ? "Automated rolling needs a license key — activate one in Settings."
+              : undefined
+          }
+        >
           {running ? <Square size={18} /> : <Play size={18} />}
           {running ? "Stop Rolling" : "Start Rolling"}
         </button>
         <span className="keycap">Ctrl + Shift + Q</span>
-        <span className="footer-note">Manual analysis and profiles work without starting automation.</span>
+        <span className="footer-note">
+          {license !== null && !license.licensed
+            ? "Automated rolling is locked — activate a license key in Settings. Manual analysis stays free."
+            : "Manual analysis and profiles work without starting automation."}
+        </span>
       </footer>
 
       {showOnboarding && <OnboardingModal onClose={dismissOnboarding} />}
@@ -494,22 +551,28 @@ function Profiles({
 
   // Auto-seed the per-weapon hierarchies from the current profiles: positives
   // from every profile's desired_positives, negatives from acceptable_negatives.
-  // Only seeds when this weapon has no saved order yet, so it never clobbers a
-  // hand-dragged list. The user can then just drag to reorder.
+  //
+  // MERGE-APPEND, never replace: the user's hand-dragged order is preserved
+  // exactly, and any profile stat not yet in the list is appended at the end.
+  // (The old "seed only when empty" logic meant stats selected AFTER the first
+  // seed — especially acceptable negatives — never showed up in the list.)
+  // Removal stays manual (the ✕ button), so nothing vanishes unexpectedly.
   useEffect(() => {
     const w = config.weapon;
     if (!w) return;
     const posSeed = uniq(config.profiles.flatMap((p) => p.desired_positives ?? []));
     const negSeed = uniq(config.profiles.flatMap((p) => p.acceptable_negatives ?? []));
-    const posStored = config.stat_hierarchies?.[w];
-    const negStored = config.neg_hierarchies?.[w];
-    const needPos = (!posStored || posStored.length === 0) && posSeed.length > 0;
-    const needNeg = (!negStored || negStored.length === 0) && negSeed.length > 0;
-    if (!needPos && !needNeg) return;
+    const posStored = config.stat_hierarchies?.[w] ?? [];
+    const negStored = config.neg_hierarchies?.[w] ?? [];
+    const posMerged = [...posStored, ...posSeed.filter((s) => !posStored.includes(s))];
+    const negMerged = [...negStored, ...negSeed.filter((s) => !negStored.includes(s))];
+    const posChanged = posMerged.length !== posStored.length;
+    const negChanged = negMerged.length !== negStored.length;
+    if (!posChanged && !negChanged) return;
     setConfig({
       ...config,
-      stat_hierarchies: needPos ? { ...(config.stat_hierarchies ?? {}), [w]: posSeed } : config.stat_hierarchies,
-      neg_hierarchies: needNeg ? { ...(config.neg_hierarchies ?? {}), [w]: negSeed } : config.neg_hierarchies
+      stat_hierarchies: posChanged ? { ...(config.stat_hierarchies ?? {}), [w]: posMerged } : config.stat_hierarchies,
+      neg_hierarchies: negChanged ? { ...(config.neg_hierarchies ?? {}), [w]: negMerged } : config.neg_hierarchies
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.weapon, config.profiles]);
@@ -946,7 +1009,10 @@ function SettingsPage({
   reconnect,
   exportDiagnostics,
   checkRagStatus,
-  rebuildRagIndex
+  rebuildRagIndex,
+  license,
+  activateLicense,
+  deactivateLicense
 }: {
   apiBaseInput: string;
   setApiBaseInput: (value: string) => void;
@@ -956,10 +1022,17 @@ function SettingsPage({
   exportDiagnostics: () => Promise<void>;
   checkRagStatus: () => Promise<{ ready: boolean; entries: number }>;
   rebuildRagIndex: () => Promise<void>;
+  license: LicenseStatus | null;
+  activateLicense: (key: string) => Promise<LicenseStatus>;
+  deactivateLicense: () => Promise<void>;
 }) {
   const [rag, setRag] = useState<{ ready: boolean; entries: number } | null>(null);
   return (
     <section className="page-grid">
+      <div className="panel">
+        <PanelTitle icon={<KeyRound />} title="License" />
+        <LicenseCard license={license} activateLicense={activateLicense} deactivateLicense={deactivateLicense} />
+      </div>
       <div className="panel">
         <PanelTitle icon={<Settings />} title="API" />
         <label>API base URL</label>
@@ -993,6 +1066,70 @@ function SettingsPage({
         </div>
       </div>
     </section>
+  );
+}
+
+function LicenseCard({
+  license,
+  activateLicense,
+  deactivateLicense
+}: {
+  license: LicenseStatus | null;
+  activateLicense: (key: string) => Promise<LicenseStatus>;
+  deactivateLicense: () => Promise<void>;
+}) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (!key.trim()) return;
+    setBusy(true);
+    try {
+      const info = await activateLicense(key.trim());
+      if (info.licensed) setKey("");
+    } catch {
+      // activateLicense already surfaces the message via the toast.
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (license?.licensed) {
+    const expiry = license.expires ? new Date(license.expires * 1000).toLocaleDateString() : "never";
+    return (
+      <>
+        <p>
+          Licensed to <strong>{license.licensee || "this machine"}</strong> ({license.tier} tier). Expires: {expiry}.
+        </p>
+        <p className="hint">Automated rolling is unlocked on this machine.</p>
+        <div className="row">
+          <button className="secondary" onClick={deactivateLicense}>Remove License</button>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <p>{license ? license.reason || "No license activated." : "License status unknown."}</p>
+      <label>License key</label>
+      <input
+        value={key}
+        placeholder="RVNF1..."
+        onChange={(e) => setKey(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+        }}
+      />
+      <p className="hint">
+        Automated rolling needs a key. Manual analysis, profiles, and the roll log stay free.
+      </p>
+      <div className="row">
+        <button className="secondary" onClick={submit} disabled={busy || !key.trim()}>
+          {busy ? "Checking…" : "Activate"}
+        </button>
+      </div>
+    </>
   );
 }
 

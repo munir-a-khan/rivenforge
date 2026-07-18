@@ -98,6 +98,14 @@ export interface RagStatus {
   entries: number;
 }
 
+export interface LicenseStatus {
+  licensed: boolean;
+  licensee: string;
+  tier: string;
+  expires: number | null;
+  reason: string;
+}
+
 export interface RollEvent {
   kind: "roll";
   session_id: string;
@@ -263,6 +271,14 @@ export const api = {
       })
     }),
   stopRoll: () => request<{ stopped: boolean }>("/roll/stop", { method: "POST" }),
+  licenseStatus: () => request<LicenseStatus>("/license/status"),
+  activateLicense: (key: string) =>
+    request<LicenseStatus>("/license/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key })
+    }),
+  deactivateLicense: () => request<LicenseStatus>("/license/deactivate", { method: "POST" }),
   ragStatus: () => request<RagStatus>("/rag/status"),
   rebuildRag: () => request<{ job_id: string }>("/rag/rebuild", { method: "POST" })
 };

@@ -1,5 +1,21 @@
 """
-Load/save user_config.json from the config/ directory.
+Load/save user_config.json.
+
+Path resolution matters here — this was the "config resets to the build-time
+weapon on every launch" bug:
+
+- **Frozen (PyInstaller sidecar)**: ``__file__`` lives in the ephemeral
+  ``_MEIxxxxx`` extraction dir, which is re-created (from the build-time
+  snapshot) on every process start and deleted afterwards. Writing config
+  there means every save silently dies with the process and every launch
+  reads the stale bundled snapshot. Frozen builds therefore persist to
+  ``%LOCALAPPDATA%\\rivenforge\\user_config.json`` — a durable, per-user path
+  that survives restarts, updates, and reinstalls.
+- **Dev (running from source)**: the repo-local ``config/`` dir keeps working
+  exactly as before, so development behavior is unchanged.
+
+On the first frozen run (durable file missing) the bundled snapshot is copied
+across once, so defaults/profiles shipped with the build seed the user file.
 """
 
 from __future__ import annotations
@@ -7,12 +23,36 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from datetime import UTC, datetime
 
 from core.contracts import UserConfigDict
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config", "user_config.json")
+_BUNDLED_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config", "user_config.json")
+
+
+def _resolve_config_path() -> str:
+    if getattr(sys, "frozen", False):
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "rivenforge", "user_config.json")
+    return _BUNDLED_CONFIG_PATH
+
+
+CONFIG_PATH = _resolve_config_path()
 CURRENT_CONFIG_SCHEMA_VERSION = 1
+
+
+def _seed_from_bundle_once() -> None:
+    """First frozen run: copy the bundled config snapshot to the durable path."""
+    if CONFIG_PATH == _BUNDLED_CONFIG_PATH:
+        return  # dev mode — same file, nothing to seed
+    if os.path.exists(CONFIG_PATH) or not os.path.exists(_BUNDLED_CONFIG_PATH):
+        return
+    try:
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+        shutil.copy2(_BUNDLED_CONFIG_PATH, CONFIG_PATH)
+    except Exception:
+        pass  # defaults still apply; never block startup on a seed copy
 
 _DEFAULTS = {
     "schema_version": CURRENT_CONFIG_SCHEMA_VERSION,
@@ -59,6 +99,7 @@ def _migrate_config(data: dict) -> dict:
 
 
 def load_config() -> UserConfigDict:
+    _seed_from_bundle_once()
     if not os.path.exists(CONFIG_PATH):
         return dict(_DEFAULTS)
     try:

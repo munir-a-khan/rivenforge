@@ -54,3 +54,13 @@ Desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# License signing key — NEVER commit
+tools/license_private_key.pem
+*license_private_key*
+
+# Activated license keys — per-user secrets, and if left in config/ they would
+# get bundled into the installer and license every user for free. Never commit.
+license.key
+config/license.key
+**/license.key

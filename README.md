@@ -266,8 +266,11 @@ The local sidecar exposes endpoints such as:
 - `GET /capture/status`
 - `POST /capture/analyze` (`backend=auto|wgc`)
 - `POST /capture/input-probe`
-- `POST /roll/start`
+- `POST /roll/start` (license-gated — 402 without an activated key)
 - `POST /roll/stop`
+- `GET /license/status`
+- `POST /license/activate`
+- `POST /license/deactivate`
 - `GET /rag/status`
 - `POST /rag/rebuild`
 - `GET /diagnostics/export`
@@ -360,9 +363,31 @@ rivenforge does not use memory reading, game injection, packet manipulation, ste
 
 Screenshots and diagnostics stay local unless the user explicitly exports and shares them. Automation remains optional; manual screenshot analysis and profile testing work without any in-game clicking.
 
+## License Keys (Activation)
+
+Automated rolling requires an activation key. Everything else — manual
+screenshot analysis, profiles, the roll log, diagnostics — works unlicensed.
+
+Keys are offline-verified Ed25519 tokens (`RVNF1.<payload>.<signature>`). The
+app ships only the public key and verifies signatures locally, so there is no
+license server, no network dependency, and no hosting cost. A key cannot be
+forged without the private signing key, which never leaves the maintainer's
+machine and is gitignored.
+
+Activate under **Settings → License**; the key is stored in
+`%LOCALAPPDATA%\rivenforge\license.key` and survives restarts and reinstalls.
+
+Maintainer-only key issuance:
+
+```powershell
+python tools/make_license.py "Alice"            # perpetual
+python tools/make_license.py "Bob" --days 30    # time-limited
+```
+
 ## Roadmap
 
 - ~~Improve OCR reliability while Warframe is not the focused window.~~ Done via the WGC background-capture backend.
+- Android companion app: pause/resume and edit rolls from a phone, watch the roll log live. Design notes in [docs/android-companion.md](docs/android-companion.md).
 - Expand fixture-based OCR regression tests.
 - Finish Tauri feature parity before removing the PyQt GUI.
 - Improve profile import/export and sample profiles.

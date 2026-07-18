@@ -494,6 +494,84 @@ def wait_for_screen_settle(stop_flag=None, after_revert: bool = False) -> bool:
     return False  # timed out gracefully
 
 
+def recover_to_cycle(stop_flag=None, timeout: float = 20.0) -> bool:
+    """
+    Best-effort return to the 'CYCLE FOR KUVA' screen after a transient UI
+    hiccup, WITHOUT ending the session.
+
+    A button OCR-timing-out mid-roll used to raise straight out of the roll
+    loop and kill the whole session ("stops out of nowhere after many rolls").
+    The loop now calls this instead: it figures out whatever state Warframe is
+    actually in and gets back to a cycle-ready screen so rolling can continue.
+
+    Safe by construction — if it finds an *unresolved* roll it REVERTS it
+    (selects the old card / clicks NO); it never keeps a roll that was never
+    scored. Returns True if a stop was requested during recovery.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if stop_flag and stop_flag.is_set():
+            return True
+
+        # If the user has alt-tabbed away, don't fight them — pause until they
+        # return (or stop). Same non-focus-stealing contract as press_cycle.
+        hwnd = _get_wf_hwnd()
+        if hwnd and _foreground_is_user_elsewhere(hwnd):
+            if _interruptible_sleep(0.6, stop_flag):
+                return True
+            continue
+
+        try:
+            items = _ocr_all_text()
+        except Exception:
+            if _interruptible_sleep(0.5, stop_flag):
+                return True
+            continue
+        texts = [i["text"].strip().upper() for i in items]
+
+        # Already back on the cycle screen — recovered.
+        if any("CYCLE FOR" in t for t in texts):
+            time.sleep(0.25)
+            return False
+
+        # A YES/NO dialog is up — default to NO (back out / revert safely).
+        yes_item = next((i for i in items
+                         if i["text"].strip().rstrip(".,!").upper() == "YES"), None)
+        no_item  = next((i for i in items
+                         if i["text"].strip().rstrip(".,!").upper() == "NO"), None)
+        if yes_item and no_item:
+            _click(no_item["cx"], no_item["cy"])
+            time.sleep(0.6)
+            continue
+
+        # Two-card CONFIRM view with no dialog — select the OLD (left) card and
+        # confirm it, reverting to the equipped riven rather than keeping a roll
+        # we never scored.
+        if any(t == "CONFIRM" for t in texts):
+            try:
+                from core.capture import grab_frame
+                frame = grab_frame()
+                w, h = frame.size
+                _click(int(w * 0.358), int(h * 0.57))   # left/old card
+                time.sleep(0.5)
+            except Exception:
+                pass
+            pos = _find_on_screen("CONFIRM")
+            if pos:
+                _click(pos[0], pos[1])
+                time.sleep(0.5)
+            continue
+
+        # Nothing recognizable yet — animation may still be running, or focus
+        # may have flickered. Re-assert focus (without stealing from another
+        # app) and re-poll.
+        activate_warframe()
+        if _interruptible_sleep(0.5, stop_flag):
+            return True
+
+    return False  # timed out — the next press_cycle will re-poll / pause
+
+
 # ── Legacy compat ────────────────────────────────────────────────────────────
 _DEFAULTS = {}
 _coords: dict = {}

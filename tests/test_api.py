@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import app
+from core import license as core_license
 
 
 def _png_bytes() -> bytes:
@@ -188,6 +189,9 @@ def test_suggested_profiles_endpoint(monkeypatch):
 def test_roll_start_and_stop_are_wrapped(monkeypatch):
     monkeypatch.setattr("api.app.session_manager.start", lambda payload: "session-1")
     monkeypatch.setattr("api.app.session_manager.stop", lambda: True)
+    # /roll/start is license-gated (see tests/test_license.py); this test is
+    # about the session wrapper, so stand in a licensed status.
+    monkeypatch.setattr("core.license.status", lambda: core_license.LicenseInfo(True, licensee="Test"))
     client = TestClient(app)
 
     start = client.post(
