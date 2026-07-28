@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -40,8 +41,9 @@ class RivenforgeClient(private val creds: Creds) {
         onState(ConnState.CONNECTING)
         val req = bearer(Request.Builder().url(creds.wsEvents)).build()
         socket = http.newWebSocket(req, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) =
+            override fun onOpen(webSocket: WebSocket, response: Response) {
                 main.post { onState(ConnState.CONNECTED) }
+            }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val item = runCatching { parseEvent(text) }.getOrNull()
@@ -51,11 +53,13 @@ class RivenforgeClient(private val creds: Creds) {
                 }
             }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 main.post { onState(ConnState.ERROR) }
+            }
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) =
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 main.post { onState(ConnState.DISCONNECTED) }
+            }
         })
     }
 
@@ -152,7 +156,7 @@ class RivenforgeClient(private val creds: Creds) {
         runCatching {
             val req = bearer(
                 Request.Builder().url("${creds.httpBase}/roll/stop")
-                    .post(okhttp3.RequestBody.create(null, ByteArray(0)))
+                    .post(ByteArray(0).toRequestBody(null))
             ).build()
             http.newCall(req).execute().use { it.isSuccessful }
         }.getOrDefault(false)
