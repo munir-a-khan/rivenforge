@@ -177,14 +177,32 @@ def reconcile_parsed_with_name(
             ocr_pos_val[pid] = float(p.get("value", 0.0))
 
     neg_entries = list(parsed.get("negatives", []))
-    neg_ids = {i for i in (_id(str(n.get("stat", ""))) for n in neg_entries) if i}
 
-    pos_ids = [i for i in decoded if i not in neg_ids]
+    # A riven has AT MOST ONE curse. OCR sign-noise can mark several stat lines
+    # negative at once; the old code subtracted EVERY such stat from the
+    # name-decoded set, which collapsed a good 2-3 positive roll down to a single
+    # positive (the field bug). The name is authoritative for the stat SET, so
+    # only ONE of its stats may be the curse: prefer a negative the name actually
+    # contains, and among those the most-negative value. Everything else OCR
+    # flagged negative is treated as sign noise and left as a positive.
+    def _fval(e: dict) -> float:
+        try:
+            return float(e.get("value", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    curse_id = None
+    if neg_entries:
+        in_name = [n for n in neg_entries if _id(str(n.get("stat", ""))) in decoded]
+        best = min(in_name or neg_entries, key=_fval)
+        curse_id = _id(str(best.get("stat", "")))
+
+    pos_ids = [i for i in decoded if i != curse_id]
 
     # Rare 3-positive+curse: the name omits one positive. Fill from OCR.
     if len(pos_ids) < 3:
         for pid in ocr_pos_val:
-            if pid not in pos_ids and pid not in neg_ids and len(pos_ids) < 3:
+            if pid not in pos_ids and pid != curse_id and len(pos_ids) < 3:
                 pos_ids.append(pid)
 
     positives = [{"stat": display_name(i), "value": ocr_pos_val.get(i, 0.0)} for i in pos_ids]

@@ -27,11 +27,29 @@ Format per roll:
 """
 
 import os
+import sys
 import time
 import threading
 from datetime import datetime
 
-_LOG_DIR  = os.path.join(os.path.dirname(__file__), "..", "logs")
+
+def _resolve_log_dir() -> str:
+    """
+    Where roll_debug.log lives.
+
+    In a frozen build, ``__file__`` is inside the ephemeral PyInstaller _MEI
+    extraction dir, so logging there means the log is deleted when the app
+    exits — the exact reason field diagnostics went missing. Write to the
+    durable per-user data dir instead (same place as the config), so a user's
+    rolls survive and can be inspected. In dev, keep the repo-local logs/ dir.
+    """
+    if getattr(sys, "frozen", False):
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "rivenforge", "logs")
+    return os.path.join(os.path.dirname(__file__), "..", "logs")
+
+
+_LOG_DIR  = _resolve_log_dir()
 _LOG_PATH = os.path.join(_LOG_DIR, "roll_debug.log")
 _MAX_BYTES = 10 * 1024 * 1024   # 10 MB — rotate when exceeded
 

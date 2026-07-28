@@ -206,6 +206,7 @@ class RollerThread(threading.Thread):
                     # OCR only for the negative (+ values). Falls back to raw OCR if
                     # the name can't be decoded.
                     riven_name = ""
+                    name_decode_note = ""
                     try:
                         from core import vision as _vision
                         from core.riven_names import reconcile_parsed_with_name
@@ -215,8 +216,14 @@ class RollerThread(threading.Thread):
                             parsed, decoded = reconcile_parsed_with_name(
                                 parsed, riven_name, self.weapon, melee=melee
                             )
-                    except Exception:
-                        pass
+                            if decoded:
+                                name_decode_note = f"name-decode {riven_name!r} -> {sorted(decoded)}"
+                            else:
+                                name_decode_note = f"name-decode FAILED {riven_name!r} (raw OCR used)"
+                        else:
+                            name_decode_note = "name-decode SKIPPED (no name OCR'd; raw OCR used)"
+                    except Exception as _e:
+                        name_decode_note = f"name-decode ERROR: {_e}"
 
                     # ── 5. Evaluate ───────────────────────────────────────────
                     rule_result = rules.evaluate(parsed, self.profiles)
@@ -313,6 +320,8 @@ class RollerThread(threading.Thread):
                         # diagnostic export shows whether new-vs-equipped separation
                         # worked. (Free, logging-only.)
                         rag_result.setdefault("notes", []).append(f"OCR {_last_cluster_debug}")
+                        if name_decode_note:
+                            rag_result["notes"].append(name_decode_note)
                         capture_info = dict(frame.info or {})
                         capture_info["frame_size"] = frame.size
                         rlog.log_roll(

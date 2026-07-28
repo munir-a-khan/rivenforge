@@ -96,6 +96,34 @@ def test_reconcile_drops_name_stat_that_is_the_negative():
     assert "Damage" not in pos_names
 
 
+def test_reconcile_caps_curse_removal_at_one():
+    # THE FIELD BUG: OCR sign-noise marked TWO of the three NAME stats negative.
+    # A riven has at most one curse, so only the strongest may be removed — the
+    # other must stay a positive instead of collapsing the read to ONE positive.
+    ocr = _parsed(
+        [("Toxin", 90.0)],
+        [("Multishot", -30.0), ("Punch Through", -120.0)],
+    )
+    fixed, _ = reconcile_parsed_with_name(ocr, "Quatz Sati-lexitox", "quatz")
+    pos = {p["stat"] for p in fixed["positives"]}
+    # decoded = {Multishot, Punch Through, Toxin}; strongest in-name negative is
+    # Punch Through -> the one curse. Multishot stays positive: TWO positives.
+    assert pos == {"Multishot", "Toxin"}
+    assert len(fixed["positives"]) == 2
+
+
+def test_reconcile_ignores_negative_not_in_name():
+    # A negative for a stat the name doesn't contain is an OCR hallucination and
+    # must not remove any real positive.
+    ocr = _parsed(
+        [("Multishot", 170.0), ("Ammo Maximum", 120.0)],
+        [("Damage", -232.0)],  # not part of Sati-ampicron
+    )
+    fixed, _ = reconcile_parsed_with_name(ocr, "Spectra Sati-ampicron", "spectra")
+    pos = {p["stat"] for p in fixed["positives"]}
+    assert pos == {"Multishot", "Ammo Maximum", "Critical Chance"}
+
+
 def test_reconcile_no_op_on_garbled_name():
     ocr = _parsed([("Multishot", 130.0)], [("Damage", -80.0)])
     fixed, decoded = reconcile_parsed_with_name(ocr, "Weapon zzzzqxqx", "weapon")
