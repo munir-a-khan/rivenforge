@@ -6,12 +6,14 @@ plugins {
 
 android {
     namespace = "com.rivenforge.companion"
-    compileSdk = 35
+    // API 34: fully supported by AGP 8.5 with no compileSdk warning, and none
+    // of the deps here need 35. Bump to 35 later if you target newer APIs.
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.rivenforge.companion"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
     }
