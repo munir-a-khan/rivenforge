@@ -61,6 +61,46 @@ fn get_sidecar_logs(state: State<'_, Arc<SidecarState>>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Add the Windows Firewall inbound rule that lets a paired phone reach the
+/// sidecar, via a single UAC prompt. Called when the user turns Phone Access
+/// on, so license holders never have to run an admin command by hand.
+///
+/// We write a tiny script to temp and launch an ELEVATED PowerShell against it
+/// (`Start-Process -Verb RunAs` = one UAC dialog). Rule creation is idempotent
+/// (remove-then-add), scoped to Private networks and this one TCP port; the
+/// pairing token still gates every request. Best-effort: if the user declines
+/// UAC, nothing is added and phone access simply won't be reachable until they
+/// allow it.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn ensure_phone_firewall() -> Result<(), String> {
+    let script = format!(
+        "Remove-NetFirewallRule -DisplayName 'rivenforge companion' -ErrorAction SilentlyContinue\r\n\
+         New-NetFirewallRule -DisplayName 'rivenforge companion' -Direction Inbound -Action Allow \
+         -Protocol TCP -LocalPort {FIXED_API_PORT} -Profile Private | Out-Null\r\n"
+    );
+    let script_path = std::env::temp_dir().join("rivenforge_fw.ps1");
+    std::fs::write(&script_path, script).map_err(|e| format!("write firewall script: {e}"))?;
+
+    // Single-quoted tokens only; Windows temp paths don't contain single quotes.
+    let outer = format!(
+        "Start-Process powershell -Verb RunAs -WindowStyle Hidden \
+         -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{}'",
+        script_path.display()
+    );
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &outer])
+        .spawn()
+        .map_err(|e| format!("launch elevated firewall command: {e}"))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn ensure_phone_firewall() -> Result<(), String> {
+    Ok(())
+}
+
 fn parse_ready_line(line: &str) -> Option<String> {
     let payload = line.strip_prefix("RIVENFORGE_API_READY ")?;
     let parsed: Value = serde_json::from_str(payload).ok()?;
@@ -138,7 +178,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_sidecar_api_base,
             get_sidecar_logs,
-            get_hotkey_label
+            get_hotkey_label,
+            ensure_phone_firewall
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

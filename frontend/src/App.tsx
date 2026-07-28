@@ -34,6 +34,7 @@ import {
   WeaponType,
   api,
   createEventSocket,
+  ensurePhoneFirewall,
   getApiBase,
   initBundledApiBase,
   setApiBaseOverride,
@@ -1162,6 +1163,7 @@ function PhoneAccessCard({
   const [qr, setQr] = useState("");
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
 
   const enabled = config.phone_access_enabled ?? false;
   const port = (() => {
@@ -1202,7 +1204,15 @@ function PhoneAccessCard({
     setBusy(true);
     try {
       await saveConfig({ ...config, phone_access_enabled: on });
-      if (on && !status?.token) await api.pairRotate();
+      if (on) {
+        if (!status?.token) await api.pairRotate();
+        // One UAC prompt opens the firewall so a phone can reach the sidecar —
+        // no admin command for the user to type.
+        await ensurePhoneFirewall();
+        setNote("Approve the Windows prompt to allow phone access through the firewall, then fully restart the app.");
+      } else {
+        setNote("");
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -1238,10 +1248,12 @@ function PhoneAccessCard({
       {!enabled && (
         <p className="hint">
           Off — the app is reachable only from this PC. Turn on to pair the rivenforge phone app and
-          watch your rolls live. <strong>Restart the app after enabling</strong> so it starts listening
-          on your network.
+          watch your rolls live. Enabling adds a firewall rule (one Windows prompt) and needs an
+          <strong> app restart</strong> to start listening on your network.
         </p>
       )}
+
+      {enabled && note && <p className="hint" style={{ color: "var(--accent)" }}>{note}</p>}
 
       {enabled && !status?.token && (
         <div className="row">

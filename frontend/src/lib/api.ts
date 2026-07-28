@@ -179,6 +179,20 @@ export const setApiBase = setApiBaseOverride;
  * called here — the fixed default always works unless the user picked a
  * custom port via --port, in which case Tauri reports that explicitly.
  */
+/**
+ * Ask the desktop shell to add the Windows Firewall rule that lets a paired
+ * phone reach the sidecar (one UAC prompt). No-op outside Tauri / on failure.
+ * Returns true if the elevated command was launched.
+ */
+export async function ensurePhoneFirewall(): Promise<boolean> {
+  try {
+    await invoke("ensure_phone_firewall");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function initBundledApiBase(): Promise<string | null> {
   try {
     const apiBase = await invoke<string | null>("get_sidecar_api_base");
