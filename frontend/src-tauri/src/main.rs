@@ -170,9 +170,13 @@ fn main() {
 
             tauri::async_runtime::spawn(async move {
                 let command = match app_handle.shell().sidecar("rivenforge-api").map(|cmd| {
+                    // Intentionally NO --host: the sidecar chooses its bind
+                    // address from config — 127.0.0.1 normally, 0.0.0.0 when the
+                    // user enables Phone Access. Forcing --host 127.0.0.1 here
+                    // silently defeated the phone companion (it could never be
+                    // reached off the PC no matter the setting). Access stays
+                    // gated by the pairing token either way.
                     cmd.args([
-                        "--host",
-                        FIXED_API_HOST,
                         "--port",
                         &FIXED_API_PORT.to_string(),
                     ])
