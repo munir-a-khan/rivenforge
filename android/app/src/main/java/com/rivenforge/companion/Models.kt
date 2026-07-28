@@ -29,3 +29,16 @@ data class SessionInfo(
     val weaponType: String,
     val rollLimit: Int
 )
+
+/**
+ * The desktop's current saved roll settings (GET /config), shown on the "Roll
+ * Again" card and re-sent verbatim to restart the same session.
+ */
+data class RollSettings(
+    val weapon: String,
+    val weaponType: String,
+    val rollLimit: Int,          // 0 = unlimited
+    val rollUntilMatch: Boolean,
+    val statPriority: List<String>,
+    val negPriority: List<String>
+)

@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -160,5 +161,67 @@ class RivenforgeClient(private val creds: Creds) {
             ).build()
             http.newCall(req).execute().use { it.isSuccessful }
         }.getOrDefault(false)
+    }
+
+    // ── Roll Again ─────────────────────────────────────────────────────────────
+    // The desktop's saved config IS the roll payload (same mapping the desktop's
+    // "Start Rolling" uses), so the phone can restart the exact same session.
+
+    private var lastConfig: JSONObject? = null
+
+    suspend fun fetchSettings(): RollSettings? = withContext(Dispatchers.IO) {
+        runCatching {
+            val req = bearer(Request.Builder().url("${creds.httpBase}/config")).build()
+            http.newCall(req).execute().use { r ->
+                val o = JSONObject(r.body?.string().orEmpty())
+                lastConfig = o
+                val weapon = o.optString("weapon")
+                RollSettings(
+                    weapon = weapon,
+                    weaponType = o.optString("weapon_type"),
+                    rollLimit = o.optInt("roll_limit"),
+                    rollUntilMatch = o.optBoolean("roll_until_match"),
+                    statPriority = strList(o.optJSONObject("stat_hierarchies")?.optJSONArray(weapon)),
+                    negPriority = strList(o.optJSONObject("neg_hierarchies")?.optJSONArray(weapon))
+                )
+            }
+        }.getOrNull()
+    }
+
+    /** Restart the desktop's current settings. Returns null on success, else a message. */
+    suspend fun rollAgain(): String? {
+        if (lastConfig == null) fetchSettings()
+        val cfg = lastConfig ?: return "Couldn't read the current settings from the PC."
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val weapon = cfg.optString("weapon")
+                val payload = JSONObject()
+                    .put("weapon", weapon)
+                    .put("weapon_type", cfg.optString("weapon_type"))
+                    .put("profiles", cfg.optJSONArray("profiles") ?: JSONArray())
+                    .put("roll_limit", cfg.optInt("roll_limit"))
+                    .put("rag_threshold", cfg.optDouble("rag_threshold", 0.6))
+                    .put("animation_wait", cfg.optDouble("animation_wait", 2.5))
+                    .put("roll_until_match", cfg.optBoolean("roll_until_match"))
+                    .put("confirm_reads", cfg.optInt("confirm_reads", 3))
+                    .put("stat_priority", cfg.optJSONObject("stat_hierarchies")?.optJSONArray(weapon) ?: JSONArray())
+                    .put("neg_priority", cfg.optJSONObject("neg_hierarchies")?.optJSONArray(weapon) ?: JSONArray())
+                val body = payload.toString().toRequestBody("application/json".toMediaType())
+                val req = bearer(Request.Builder().url("${creds.httpBase}/roll/start").post(body)).build()
+                http.newCall(req).execute().use { r ->
+                    when {
+                        r.isSuccessful -> null
+                        r.code == 402 -> "The PC needs an active license to roll."
+                        r.code == 409 -> "A session is already running."
+                        else -> "Couldn't start (HTTP ${r.code})."
+                    }
+                }
+            }.getOrDefault("Couldn't reach the PC.")
+        }
+    }
+
+    private fun strList(a: JSONArray?): List<String> {
+        if (a == null) return emptyList()
+        return (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
     }
 }
