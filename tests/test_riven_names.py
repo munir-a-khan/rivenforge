@@ -112,6 +112,22 @@ def test_reconcile_caps_curse_removal_at_one():
     assert len(fixed["positives"]) == 2
 
 
+def test_reconcile_drops_phantom_negatives_from_the_negatives_list():
+    # A stat restored as a positive must NOT still be listed as a negative:
+    # rules.evaluate checks every negative against acceptable_negatives, so a
+    # leftover phantom negative rejected an otherwise-good roll.
+    ocr = _parsed(
+        [("Toxin", 90.0)],
+        [("Multishot", -30.0), ("Punch Through", -120.0)],
+    )
+    fixed, _ = reconcile_parsed_with_name(ocr, "Quatz Sati-lexitox", "quatz")
+    assert fixed["negatives"] == [{"stat": "Punch Through", "value": -120.0}]
+    neg_names = {n["stat"] for n in fixed["negatives"]}
+    pos_names = {p["stat"] for p in fixed["positives"]}
+    assert not (neg_names & pos_names)      # never both positive and negative
+    assert fixed["status"] == "ok"          # 2 positives + 1 curse is valid
+
+
 def test_reconcile_ignores_negative_not_in_name():
     # A negative for a stat the name doesn't contain is an OCR hallucination and
     # must not remove any real positive.

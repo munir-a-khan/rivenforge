@@ -71,22 +71,45 @@ fn get_sidecar_logs(state: State<'_, Arc<SidecarState>>) -> Vec<String> {
 /// pairing token still gates every request. Best-effort: if the user declines
 /// UAC, nothing is added and phone access simply won't be reachable until they
 /// allow it.
+/// Minimal base64 (no extra crate) for PowerShell's -EncodedCommand.
+#[cfg(target_os = "windows")]
+fn base64_encode(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = |i: usize| *chunk.get(i).unwrap_or(&0) as u32;
+        let n = (b(0) << 16) | (b(1) << 8) | b(2);
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
 #[cfg(target_os = "windows")]
 #[tauri::command]
 fn ensure_phone_firewall() -> Result<(), String> {
-    let script = format!(
-        "Remove-NetFirewallRule -DisplayName 'rivenforge companion' -ErrorAction SilentlyContinue\r\n\
+    // The command is fully static (the port is a compile-time constant) and is
+    // handed over as -EncodedCommand: base64 of UTF-16LE, which contains no
+    // spaces or quotes. That matters twice over —
+    //   * no script file is written, so there is no window in which another
+    //     process running as this user could swap the file's contents between
+    //     write and ELEVATED execution (a local privilege-escalation pattern);
+    //   * nothing user-derived is interpolated into the PowerShell string, so a
+    //     profile path containing an apostrophe (e.g. C:\Users\O'Brien\...)
+    //     can't break out of the quoting.
+    let ps = format!(
+        "Remove-NetFirewallRule -DisplayName 'rivenforge companion' -ErrorAction SilentlyContinue; \
          New-NetFirewallRule -DisplayName 'rivenforge companion' -Direction Inbound -Action Allow \
-         -Protocol TCP -LocalPort {FIXED_API_PORT} -Profile Private | Out-Null\r\n"
+         -Protocol TCP -LocalPort {FIXED_API_PORT} -Profile Private | Out-Null"
     );
-    let script_path = std::env::temp_dir().join("rivenforge_fw.ps1");
-    std::fs::write(&script_path, script).map_err(|e| format!("write firewall script: {e}"))?;
+    let utf16: Vec<u8> = ps.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let encoded = base64_encode(&utf16);
 
-    // Single-quoted tokens only; Windows temp paths don't contain single quotes.
     let outer = format!(
         "Start-Process powershell -Verb RunAs -WindowStyle Hidden \
-         -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{}'",
-        script_path.display()
+         -ArgumentList '-NoProfile','-EncodedCommand','{encoded}'"
     );
     std::process::Command::new("powershell")
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &outer])

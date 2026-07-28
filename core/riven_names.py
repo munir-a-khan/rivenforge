@@ -192,10 +192,18 @@ def reconcile_parsed_with_name(
             return 0.0
 
     curse_id = None
+    curse_entry = None
     if neg_entries:
         in_name = [n for n in neg_entries if _id(str(n.get("stat", ""))) in decoded]
-        best = min(in_name or neg_entries, key=_fval)
-        curse_id = _id(str(best.get("stat", "")))
+        curse_entry = min(in_name or neg_entries, key=_fval)
+        curse_id = _id(str(curse_entry.get("stat", "")))
+
+    # The non-curse "negatives" were sign noise; they are restored as positives
+    # below, so they must ALSO be dropped from the negatives list. Leaving them
+    # there listed the same stat as both positive and negative, and rules.evaluate
+    # checks every negative against acceptable_negatives — so a phantom negative
+    # rejected an otherwise-good roll (the same under-read symptom, one stage later).
+    neg_entries = [curse_entry] if curse_entry is not None else []
 
     pos_ids = [i for i in decoded if i != curse_id]
 
@@ -209,6 +217,7 @@ def reconcile_parsed_with_name(
 
     corrected = dict(parsed)
     corrected["positives"] = positives
+    corrected["negatives"] = neg_entries
     total = len(positives) + len(neg_entries)
     if len(positives) > 3 or len(neg_entries) > 1:
         corrected["status"] = "invalid"
