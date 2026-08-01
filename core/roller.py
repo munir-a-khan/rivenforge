@@ -288,6 +288,9 @@ class RollerThread(threading.Thread):
                     rag_result["new_score"]   = round(new_score, 2)
                     rag_result["best_score"]  = round(best_score, 2)
                     rag_result["is_better"]   = is_better
+                    # Card name rides along with every roll event so the desktop
+                    # Roll Log and the phone companion keep it for the record.
+                    rag_result["riven_name"]  = riven_name
                     # Record the triple-check outcome so diagnostics show whether a
                     # revert was due to an unstable/disagreeing read.
                     rag_result.setdefault("notes", [])
@@ -339,6 +342,7 @@ class RollerThread(threading.Thread):
                             dropped_sanity    = parsed.get("dropped_sanity", []),
                             blacklisted_lines = list(_blacklisted_lines),
                             capture_info      = capture_info,
+                            riven_name        = riven_name,
                         )
                     except Exception:
                         pass   # never let logging crash the rolling loop

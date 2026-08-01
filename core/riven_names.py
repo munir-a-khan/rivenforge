@@ -110,6 +110,10 @@ def decode_riven_grammar(grammar: str, *, melee: bool = False) -> set[str] | Non
             chain = _match_prefix_chain(head)
             if chain is not None:
                 ids = {*chain, _SUFFIX[suf]}
+                if len(ids) < 2:
+                    # A real riven has >= 2 positives, so a "name" decoding to a
+                    # single stat is an OCR fragment — keep trying / fall back.
+                    continue
                 if melee:
                     ids = {_MELEE_REMAP.get(i, i) for i in ids}
                 return ids
@@ -195,8 +199,19 @@ def reconcile_parsed_with_name(
     curse_entry = None
     if neg_entries:
         in_name = [n for n in neg_entries if _id(str(n.get("stat", ""))) in decoded]
-        curse_entry = min(in_name or neg_entries, key=_fval)
-        curse_id = _id(str(curse_entry.get("stat", "")))
+        out_name = [n for n in neg_entries if n not in in_name]
+        # A riven ALWAYS has 2 or 3 positives — "1 positive + 1 negative" does
+        # not exist in-game. So an in-name stat may only be the curse when the
+        # name carries 3 stats; a 2-stat name is 2 POSITIVES by definition, and
+        # an OCR "negative" on one of them is sign noise (field bug roll #22:
+        # 'Zetiata' shown as Recoil / -Damage). With a 2-stat name the curse,
+        # if any, must be an out-of-name negative.
+        if len(decoded) >= 3 and in_name:
+            curse_entry = min(in_name, key=_fval)
+        elif out_name:
+            curse_entry = min(out_name, key=_fval)
+        if curse_entry is not None:
+            curse_id = _id(str(curse_entry.get("stat", "")))
 
     # The non-curse "negatives" were sign noise; they are restored as positives
     # below, so they must ALSO be dropped from the negatives list. Leaving them

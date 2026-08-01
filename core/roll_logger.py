@@ -112,6 +112,7 @@ def log_roll(
     dropped_sanity:    list[str] = None,
     blacklisted_lines: list[str] = None,
     capture_info:      dict      = None,   # frame.info from grab_frame
+    riven_name:        str       = "",     # card name as OCR'd (weapon + grammar)
 ):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     sep = "─" * 70
@@ -128,6 +129,11 @@ def log_roll(
         f"\n[{ts}] ROLL #{roll_num}  "
         f"(kuva: {kuva_cost:,}  total: {kuva_total:,})\n",
     ]
+
+    # The riven NAME is the ground truth for the positive stat set, so it
+    # belongs in the permanent record of every roll.
+    if riven_name:
+        lines.append(f"  NAME: {riven_name!r}\n")
 
     # Capture diagnostics — which path got us pixels, was the frame dark,
     # what dimensions. Critical for postmortem when a god roll gets missed:

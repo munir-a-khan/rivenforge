@@ -128,6 +128,33 @@ def test_reconcile_drops_phantom_negatives_from_the_negatives_list():
     assert fixed["status"] == "ok"          # 2 positives + 1 curse is valid
 
 
+def test_reconcile_two_stat_name_never_yields_one_positive():
+    # FIELD BUG roll #22: 'Zetiata' (Recoil + Damage) displayed as
+    # "Recoil / -Damage" — 1 positive + 1 negative, which does not exist
+    # in-game. A 2-stat name is 2 POSITIVES by definition, so the in-name
+    # "negative" is sign noise: both stay positive, phantom negative dropped.
+    ocr = _parsed([("Recoil", 90.0)], [("Damage", -50.0)])
+    fixed, decoded = reconcile_parsed_with_name(ocr, "Quatz Zetiata", "quatz")
+    assert decoded == {"recoil", "damage"}
+    assert {p["stat"] for p in fixed["positives"]} == {"Recoil", "Damage"}
+    assert fixed["negatives"] == []
+    assert len(fixed["positives"]) >= 2
+
+
+def test_reconcile_two_stat_name_keeps_out_of_name_curse():
+    # 2-stat name + a REAL curse: the curse is a third stat NOT in the name.
+    ocr = _parsed([("Ammo Maximum", 66.0)], [("Zoom", -40.0)])
+    fixed, _ = reconcile_parsed_with_name(ocr, "Quatz Ampinok", "quatz")
+    assert {p["stat"] for p in fixed["positives"]} == {"Ammo Maximum", "Punch Through"}
+    assert fixed["negatives"] == [{"stat": "Zoom", "value": -40.0}]
+
+
+def test_decode_rejects_single_stat_fragments():
+    # A bare suffix ("cron") decodes to one stat — no real riven has fewer
+    # than 2 positives, so it must be treated as garble, not a name.
+    assert decode_riven_grammar("cron") is None
+
+
 def test_reconcile_ignores_negative_not_in_name():
     # A negative for a stat the name doesn't contain is an OCR hallucination and
     # must not remove any real positive.
